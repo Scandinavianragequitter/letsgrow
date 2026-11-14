@@ -12,7 +12,8 @@
     "dev": "tsx watch --env-file=.env src/main.ts",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
-    "simulate": "tsx scripts/simulate.ts"
+    "simulate": "tsx scripts/simulate.ts",
+    "demo": "node scripts/demo.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.8.0",

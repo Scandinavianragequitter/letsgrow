@@ -9,6 +9,8 @@ cp .env.example .env        # defaults: MESSENGER=console (no real texts)
 # add ANTHROPIC_API_KEY, or a free OPENROUTER_API_KEY (model: openrouter/free)
 npm start                   # http://localhost:3000
 ```
+
+To let friends join from their own phones, run `npm run demo` instead of `npm start` (needs `brew install cloudflared`). It opens a free Cloudflare quick tunnel to your laptop and starts the app with `PUBLIC_BASE_URL` set to the tunnel's address. Everything still runs locally; the address changes each time you run it, so start it once before a demo and leave it running.
 Sign up, describe a habit ("I want to spend less time on Instagram, under an hour a day" or "I want to stretch before and after every training"), start it, copy the friend link, open it in another tab as the friend. The **Demo controls** panel lets you skip days, set Screen Time values, add calendar events, tap ❤️ as yourself and reply as the friend. The iMessage log shows every text the agents would send.
 
 `npm run simulate` runs a full 60 days in a second and prints the timeline and final messages (`npm run simulate -- stretch gentle` for the stretching habit with the gentle policy).
