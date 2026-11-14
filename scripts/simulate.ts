@@ -5,7 +5,7 @@ import { Store } from "../src/db.js";
 import { MockIntegrations } from "../src/integrations/mock.js";
 import { ConsoleMessenger } from "../src/messaging/messenger.js";
 import { Scheduler } from "../src/engine/scheduler.js";
-import { InboundRouter } from "../src/engine/inbound.js";
+import { HabitActions } from "../src/engine/actions.js";
 import { HabitPlanSchema } from "../src/agent/plan.js";
 import { PRESETS, policyFromPreset } from "../src/policy/escalation.js";
 import { addDays, dayKey, zonedTime } from "../src/clock.js";
@@ -32,8 +32,9 @@ const store = new Store(":memory:");
 let now = 0;
 const messenger = new ConsoleMessenger(store, () => now);
 const scheduler = new Scheduler({ store, integrations: new MockIntegrations(store, true), messenger, publicBaseUrl: "http://localhost:3000" });
-const router = new InboundRouter(store, messenger, () => now);
-await messenger.start((e) => router.handle(e));
+const actions = new HabitActions({ store, durationDays: 60, publicBaseUrl: "http://localhost:3000", now: () => now });
+// No model here: this simulates the deterministic engine (reminders, verification, escalation),
+// with the person's replies applied directly. Proactive texts use their fallback wording.
 
 const user = store.createUser("Carl", ME, TZ, 0);
 store.markUserConnected(user.id);
@@ -42,8 +43,8 @@ now = zonedTime(startDay, "08:00", TZ);
 const habit = store.createHabit(user.id, plan.title, 60, JSON.stringify(policyFromPreset(preset)), now);
 store.setPlan(habit.id, JSON.stringify(plan), plan.title);
 store.activateHabit(habit.id, startDay, now);
-store.addFriend(habit.id, "Anna", FRIEND, "+16289988199", now);
-await router.handle({ handle: FRIEND, kind: "text", text: "ping" });
+const anna = store.addFriend(habit.id, "Anna", FRIEND, "+16289988199", now);
+store.activateFriend(anna.id, now);
 
 let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
 let day = startDay;
@@ -54,12 +55,12 @@ for (let i = 0; i < 61; i++) {
     await scheduler.tick(now);
     // the user taps a heart ~70% of the time, shortly after a reminder arrives
     if (kind === "stretch" && store.pendingReminders(habit.id).length && rnd() < 0.7) {
-      await router.handle({ handle: ME, kind: "reaction", emoji: "❤️" });
+      try { actions.logCompletion(store.getUser(user.id)!); } catch { /* day already resolved */ }
     }
     // Anna replies to about half of the nudges she gets
     const fe = store.friendEvents(habit.id).filter((e) => e.kind === "nudge").length;
     const replied = store.friendEvents(habit.id).filter((e) => e.kind === "support_reply").length;
-    if (fe > replied && rnd() < 0.5) await router.handle({ handle: FRIEND, kind: "text", text: "Hey, you've got this! Go stretch 💪" });
+    if (fe > replied && rnd() < 0.5) store.addFriendEvent(habit.id, anna.id, "support_reply", null, "Hey, you've got this! 💪", now);
   }
   day = addDays(day, 1);
 }

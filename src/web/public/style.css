@@ -47,3 +47,4 @@ details.dev summary{cursor:pointer;color:var(--mute);font-weight:600}
 .outbox{max-height:200px;overflow:auto;font-size:12px;background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px}
 .outbox div{margin-bottom:4px}
 .err{color:var(--bad);font-size:13px;margin-top:8px}
+.bubble .via { font-size: 11px; opacity: .55; margin-top: 4px; }

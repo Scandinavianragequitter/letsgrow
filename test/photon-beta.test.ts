@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Store } from "../src/db.js";
-import { PhotonBetaMessenger, parseTapbackText, toInboundEvent, type PhotonMessagingClient } from "../src/messaging/photon-beta.js";
+import { PhotonBetaMessenger, toInboundEvent, type PhotonMessagingClient } from "../src/messaging/photon-beta.js";
 import type { InboundEvent } from "../src/messaging/messenger.js";
 
 const AGENT = { handle: "+16289988199", id: "pho_usr_agent", kind: "agent", platform: "imessage" };
@@ -30,14 +30,9 @@ function fakeClient(inbox: any[]) {
   return { client, sent };
 }
 
-test("tapback text fallbacks become reactions; normal texts stay texts", () => {
-  assert.equal(parseTapbackText("„Stretch now. React ❤️ when done.“ ein Herz hinzugefügt"), "❤️"); // real, German iOS
-  assert.equal(parseTapbackText("Loved “Stretch now.”"), "❤️");
-  assert.equal(parseTapbackText("Liked \"Stretch now.\""), "👍");
-  assert.equal(parseTapbackText("Reacted ❤️ to “Stretch now.”"), "❤️");
-  assert.equal(parseTapbackText("done"), undefined);
-  assert.equal(parseTapbackText("I said \"maybe later\" to my coach and then went to practice for two hours"), undefined);
-  assert.deepEqual(toInboundEvent({ ...received("m", "hi", "t"), sentBy: AGENT }), undefined, "own messages ignored");
+test("own messages are ignored; tapbacks pass through as text for the agent to read", () => {
+  assert.equal(toInboundEvent({ ...received("m", "hi", "t"), sentBy: AGENT }), undefined);
+  assert.deepEqual(toInboundEvent(received("m", "„Do it“ ein Herz hinzugefügt", "t")), { handle: CARL.handle, kind: "text", text: "„Do it“ ein Herz hinzugefügt" });
 });
 
 test("polls new inbound messages once, learns the conversation, and replies into it", async () => {
@@ -56,7 +51,7 @@ test("polls new inbound messages once, learns the conversation, and replies into
   assert.equal(await m.pollOnce(), 0, "no duplicates across polls");
   assert.deepEqual(got, [
     { handle: CARL.handle, kind: "text", text: "hi" },
-    { handle: CARL.handle, kind: "reaction", emoji: "❤️" },
+    { handle: CARL.handle, kind: "text", text: "„Do it“ ein Herz hinzugefügt" },
   ]);
 
   await m.send(CARL.handle, "You're connected.");

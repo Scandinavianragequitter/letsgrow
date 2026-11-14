@@ -10,11 +10,15 @@ import { msg } from "./messages.js";
 
 const MIN = 60_000;
 
+export interface WriteRequest { to: string; purpose: string; facts: Record<string, unknown>; fallback: string }
+
 export interface SchedulerDeps {
   store: Store;
   integrations: Integrations;
   messenger: Messenger;
   publicBaseUrl: string;
+  /** Lets the agent word proactive messages. Without it, the fallback text is sent. */
+  write?: (req: WriteRequest) => Promise<string>;
 }
 
 /**
@@ -23,6 +27,10 @@ export interface SchedulerDeps {
  */
 export class Scheduler {
   constructor(private d: SchedulerDeps) {}
+
+  private say(req: WriteRequest): Promise<string> {
+    return this.d.write ? this.d.write(req) : Promise.resolve(req.fallback);
+  }
 
   async tick(now: number): Promise<void> {
     for (const habit of this.d.store.activeHabits()) {
@@ -149,12 +157,25 @@ export class Scheduler {
       const streak = trailingMisses(store.days(h.id).filter((d) => d.day <= n.day).map((d) => d.status));
       const title = (JSON.parse(h.plan_json!) as HabitPlan).title;
       if (friends.length === 0) {
-        try { await messenger.send(user.phone, msg.noFriendYet(`${publicBaseUrl}/join/${h.invite_token}`)); } catch { /* ignore */ }
+        const url = `${publicBaseUrl}/join/${h.invite_token}`;
+        try {
+          await messenger.send(user.phone, await this.say({
+            to: user.name,
+            purpose: "They missed their habit and the policy says a friend should be asked to step in, but no friend has joined yet. Encourage them briefly and ask them to send a friend their invite link.",
+            facts: { habit: title, consecutiveMissedDays: streak, inviteLink: url },
+            fallback: msg.noFriendYet(url),
+          }));
+        } catch { /* ignore */ }
       }
       for (const f of friends) {
         try {
           const idx = store.friendEvents(h.id).filter((e) => e.friend_id === f.id && e.kind === "nudge").length;
-          await messenger.send(f.phone, msg.friendNudge(f.name, user.name, title, streak, idx));
+          await messenger.send(f.phone, await this.say({
+            to: f.name,
+            purpose: `${user.name} slipped on their habit. Ask ${f.name} to send ${user.name} a short word of support by replying here (you will pass it on). Do not shame ${user.name}.`,
+            facts: { friend: f.name, person: user.name, habit: title, consecutiveMissedDays: streak, timesAskedBefore: idx },
+            fallback: msg.friendNudge(f.name, user.name, title, streak, idx),
+          }));
           store.addFriendEvent(h.id, f.id, "nudge", n.day, null, now);
         } catch (err) { console.warn(`nudge to ${f.id} failed:`, (err as Error).message); }
       }
@@ -179,12 +200,23 @@ export class Scheduler {
 
     store.setHabitStatus(h.id, "completed", now);
     try {
-      await messenger.send(user.phone, msg.userCongrats(user.name, plan.title, h.duration_days, stats.done, stats.counted, stats.longestStreak, friendLine));
+      await messenger.send(user.phone, await this.say({
+        to: user.name,
+        purpose: "They finished the full habit period. Congratulate them on their personal growth, mention how they did, and credit their friends.",
+        facts: { habit: plan.title, days: h.duration_days, daysOnTarget: stats.done, daysCounted: stats.counted, longestStreak: stats.longestStreak,
+          friends: friends.map((f) => ({ name: f.name, ...(help.get(f.id) ?? { nudges: 0, replies: 0 }) })) },
+        fallback: msg.userCongrats(user.name, plan.title, h.duration_days, stats.done, stats.counted, stats.longestStreak, friendLine),
+      }));
     } catch (err) { console.warn("congrats to user failed:", (err as Error).message); }
     for (const f of friends) {
       const r = help.get(f.id) ?? { nudges: 0, replies: 0 };
       try {
-        await messenger.send(f.phone, msg.friendCongrats(f.name, user.name, plan.title, h.duration_days, r.nudges, r.replies));
+        await messenger.send(f.phone, await this.say({
+          to: f.name,
+          purpose: `${user.name} finished their habit. Thank ${f.name}, tell them how often they helped, and that ${user.name} grew.`,
+          facts: { person: user.name, habit: plan.title, days: h.duration_days, timesAskedToHelp: r.nudges, timesReplied: r.replies, daysOnTarget: stats.done, daysCounted: stats.counted },
+          fallback: msg.friendCongrats(f.name, user.name, plan.title, h.duration_days, r.nudges, r.replies),
+        }));
         store.addFriendEvent(h.id, f.id, "final", null, null, now);
       } catch (err) { console.warn(`final message to ${f.id} failed:`, (err as Error).message); }
     }

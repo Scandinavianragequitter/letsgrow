@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { Scheduler } from "../src/engine/scheduler.js";
+import { ScriptedLlm } from "./fake-llm.js";
 import { FRIEND_PHONE, USER_PHONE, TZ, addActiveFriend, instagramPlan, setup, startHabit, stretchPlan, zonedTime } from "./helpers.js";
 import { addDays } from "../src/clock.js";
 
@@ -21,7 +23,7 @@ test("prompted: reminders anchor to calendar events, heart confirms, unconfirmed
   // First reminder goes out, user taps a heart.
   await s.scheduler.tick(zonedTime(MON, "17:51", TZ));
   assert.equal(s.out(USER_PHONE).filter((m) => m.startsWith("Stretch")).length, 1);
-  await s.router.handle({ handle: USER_PHONE, kind: "reaction", emoji: "❤️" });
+  s.actions.logCompletion(s.user);
   assert.ok(s.store.remindersForDay(habit.id, MON)[0].confirmed_at);
 
   // Second reminder goes out, user ignores it. After the window the day is missed.
@@ -41,7 +43,7 @@ test("prompted: both confirmed means done; day without a training is not applica
   await s.scheduler.tick(start);
   for (const t of ["17:55", "19:40"]) {
     await s.scheduler.tick(zonedTime(MON, t, TZ));
-    await s.router.handle({ handle: USER_PHONE, kind: "text", text: "done" });
+    s.actions.logCompletion(s.user);
   }
   await s.scheduler.tick(zonedTime(MON, "23:00", TZ));
   assert.equal(s.store.getDay(habit.id, MON)!.status, "done");
@@ -135,14 +137,14 @@ test("60 days resolves with a congrats to the user and a thank-you to the friend
   const start = zonedTime(MON, "09:00", TZ);
   s.setNow(start);
   const habit = startHabit(s, instagramPlan, start, "immediate", 60);
-  await addActiveFriend(s, habit.id, start);
+  const friend = await addActiveFriend(s, habit.id, start);
   let day = MON;
   for (let i = 0; i < 60; i++) {
     // misses on days 10 and 11, otherwise on target
     s.store.setSignal(s.user.id, day, "app_minutes:Instagram", i === 10 || i === 11 ? 120 : 40);
     await s.scheduler.tick(zonedTime(day, "22:05", TZ));
     await s.scheduler.tick(zonedTime(day, "23:59", TZ));
-    if (i === 10) await s.router.handle({ handle: FRIEND_PHONE, kind: "text", text: "You got this!" });
+    if (i === 10) s.store.addFriendEvent(habit.id, friend.id, "support_reply", null, "You got this!", s.store.getHabit(habit.id)!.created_at);
     day = addDays(day, 1);
   }
   await s.scheduler.tick(zonedTime(day, "08:00", TZ));
@@ -157,8 +159,19 @@ test("60 days resolves with a congrats to the user and a thank-you to the friend
   assert.match(congrats!, /Anna stepped in \d+ time/);
   const friendMsgs = s.out(FRIEND_PHONE);
   assert.ok(friendMsgs.some((m) => m.includes("just finished 60 days") && m.includes("replied 1 time")));
-  // the friend's cheer was relayed to the user
-  assert.ok(userMsgs.some((m) => m.includes('Anna says: "You got this!"')));
+});
+
+test("proactive messages are written by the agent when a model is available", async () => {
+  const s = setup(false, new ScriptedLlm(() => ({ text: "Anna, Carl had a rough day. Want to send him a quick cheer?", toolCalls: [] })));
+  const start = zonedTime(MON, "09:00", TZ);
+  s.setNow(start);
+  const habit = startHabit(s, instagramPlan, start, "immediate", 60);
+  await addActiveFriend(s, habit.id, start);
+  const scheduler = new Scheduler({ store: s.store, integrations: s.integrations, messenger: s.messenger, publicBaseUrl: "http://x", write: (r) => s.agent.write(r) });
+  s.store.setSignal(s.user.id, MON, "app_minutes:Instagram", 200);
+  await scheduler.tick(zonedTime(MON, "22:05", TZ));
+  await scheduler.tick(zonedTime(MON, "23:30", TZ));
+  assert.deepEqual(s.out(FRIEND_PHONE), ["Anna, Carl had a rough day. Want to send him a quick cheer?"]);
 });
 
 test("completion is sent only once", async () => {

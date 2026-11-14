@@ -23,7 +23,7 @@ export interface FriendRow {
 }
 export interface FriendEventRow { id: number; habit_id: string; friend_id: string; kind: string; day: string | null; body: string | null; created_at: number }
 export interface NudgeRow { id: number; habit_id: string; day: string; send_at: number; sent_at: number | null; note: string | null }
-export interface ChatRow { id: number; user_id: string; role: "user" | "assistant"; content: string; created_at: number }
+export interface ChatRow { id: number; user_id: string; role: "user" | "assistant"; content: string; created_at: number; channel: "web" | "imessage" }
 export interface OutboxRow { id: number; direction: "out" | "in"; handle: string; body: string; created_at: number }
 
 export const newId = (prefix: string) => `${prefix}_${randomBytes(8).toString("hex")}`;
@@ -35,6 +35,7 @@ export class Store {
     this.db = new DatabaseSync(path);
     this.db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
     this.db.exec(SCHEMA);
+    try { this.db.exec("ALTER TABLE chat ADD COLUMN channel TEXT NOT NULL DEFAULT 'web'"); } catch { /* already there */ }
   }
   private all<T>(sql: string, ...p: (string | number | null)[]): T[] {
     return this.db.prepare(sql).all(...p) as T[];
@@ -93,8 +94,9 @@ export class Store {
   setEscalation(id: string, json: string) { this.run("UPDATE habits SET escalation_json=? WHERE id=?", json, id); }
 
   // chat
-  addChat(userId: string, role: "user" | "assistant", content: string, now: number) {
-    this.run("INSERT INTO chat(user_id,role,content,created_at) VALUES(?,?,?,?)", userId, role, content, now);
+  /** One conversation thread per party (a user id or a friend id), across the website and iMessage. */
+  addChat(partyId: string, role: "user" | "assistant", content: string, now: number, channel: "web" | "imessage" = "web") {
+    this.run("INSERT INTO chat(user_id,role,content,created_at,channel) VALUES(?,?,?,?,?)", partyId, role, content, now, channel);
   }
   chat(userId: string, limit = 40) {
     return this.all<ChatRow>("SELECT * FROM (SELECT * FROM chat WHERE user_id=? ORDER BY id DESC LIMIT ?) ORDER BY id", userId, limit);

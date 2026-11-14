@@ -2,7 +2,10 @@ import { Store } from "../src/db.js";
 import { MockIntegrations } from "../src/integrations/mock.js";
 import { ConsoleMessenger } from "../src/messaging/messenger.js";
 import { Scheduler } from "../src/engine/scheduler.js";
-import { InboundRouter } from "../src/engine/inbound.js";
+import { HabitActions } from "../src/engine/actions.js";
+import { LetsGrowAgent } from "../src/agent/agent.js";
+import type { LlmClient } from "../src/agent/llm.js";
+import { ScriptedLlm } from "./fake-llm.js";
 import { HabitPlanSchema, type HabitPlan } from "../src/agent/plan.js";
 import { policyFromPreset } from "../src/policy/escalation.js";
 import { dayKey, zonedTime } from "../src/clock.js";
@@ -11,18 +14,22 @@ export const TZ = "America/New_York";
 export const USER_PHONE = "+15550001111";
 export const FRIEND_PHONE = "+15550002222";
 
-export function setup(autofill = true) {
+/** Scheduler tests run without a model: proactive messages use their fallback wording. */
+export function setup(autofill = true, llm: LlmClient = new ScriptedLlm(() => { throw new Error("no model in this test"); })) {
   const store = new Store(":memory:");
   let nowMs = 0;
-  const messenger = new ConsoleMessenger(store, () => nowMs);
+  const now = () => nowMs;
+  const transport = new ConsoleMessenger(store, now);
   const integrations = new MockIntegrations(store, autofill);
+  const actions = new HabitActions({ store, durationDays: 60, publicBaseUrl: "http://localhost:3000", now });
+  const agent = new LetsGrowAgent({ store, llm, integrations, actions, messenger: transport, now });
+  const messenger = agent.messenger;
   const scheduler = new Scheduler({ store, integrations, messenger, publicBaseUrl: "http://localhost:3000" });
-  const router = new InboundRouter(store, messenger, () => nowMs);
-  void messenger.start((e) => router.handle(e));
+  void messenger.start((e) => agent.onInbound(e));
   const user = store.createUser("Carl", USER_PHONE, TZ, 0);
   store.markUserConnected(user.id);
   return {
-    store, messenger, scheduler, router, integrations, user,
+    store, transport, messenger, scheduler, agent, actions, integrations, user,
     setNow: (ms: number) => { nowMs = ms; },
     out: (to?: string) => store.recentMessages(500).filter((m) => m.direction === "out" && (!to || m.handle === to)).map((m) => m.body),
   };
@@ -62,7 +69,7 @@ export function startHabit(
 
 export async function addActiveFriend(s: ReturnType<typeof setup>, habitId: string, now: number) {
   const f = s.store.addFriend(habitId, "Anna", FRIEND_PHONE, "+16289988199", now);
-  await s.router.handle({ handle: FRIEND_PHONE, kind: "text", text: "ping" });
+  s.store.activateFriend(f.id, now);
   return f;
 }
 

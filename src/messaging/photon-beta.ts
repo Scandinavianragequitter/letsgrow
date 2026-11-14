@@ -10,8 +10,8 @@ import type { InboundEvent, InboundHandler, Messenger } from "./messenger.js";
  * - Receiving: Beta webhooks can't reach localhost, so we poll `listMessages` every few seconds.
  * - Sending: `sendMessage` needs the conversation (space) and the agent user that should speak.
  *   A shared line can't text first, so we learn both from each person's inbound text and store them.
- * - Beta iMessage has no tapback events. iOS still delivers a tapback to a non-Apple recipient as a
- *   text like `Loved “…”` or (German) `„…“ ein Herz hinzugefügt`; we turn those back into reactions.
+ * - Beta iMessage has no tapback events. iOS delivers a tapback as text, like `Loved “…”` or
+ *   (German) `„…“ ein Herz hinzugefügt`; it is passed to the agent as-is, which understands it.
  */
 
 /** The subset of the Photon client this messenger uses (so tests can pass a fake). */
@@ -27,36 +27,13 @@ export function photonClient(apiKey: string): PhotonMessagingClient {
   return photon.projects as unknown as PhotonMessagingClient;
 }
 
-const REACTION_WORDS: [RegExp, string][] = [
-  [/^loved\b|herz|heart|❤/i, "❤️"],
-  [/^liked\b|daumen hoch|thumbs up|👍/i, "👍"],
-  [/^laughed\b|gelacht|haha|😂/i, "😂"],
-  [/^emphasi[sz]ed\b|hervorgehoben|‼️/i, "‼️"],
-  [/^disliked\b|daumen runter|👎/i, "👎"],
-  [/^questioned\b|fragezeichen|❓/i, "❓"],
-];
-
-/** Recognise iOS's text fallback for a tapback; returns the emoji or undefined for a normal text. */
-export function parseTapbackText(raw: string): string | undefined {
-  const t = raw.trim();
-  // iOS 18+: Reacted ❤️ to “...”
-  const reacted = /^reacted\s+(\S+)\s+to\s+[“"„«]/i.exec(t);
-  if (reacted) return reacted[1];
-  // Must quote the original message somewhere, otherwise it's just a text.
-  if (!/[“"„«][\s\S]*[”"“»]/.test(t)) return undefined;
-  const outside = t.replace(/[“"„«][\s\S]*[”"“»]/, " ").trim();
-  if (!outside || outside.length > 40) return undefined;
-  for (const [re, emoji] of REACTION_WORDS) if (re.test(outside)) return emoji;
-  return undefined;
-}
-
 export function toInboundEvent(m: any): InboundEvent | undefined {
   const handle: string | undefined = m?.sentBy?.handle;
   if (!handle || m?.sentBy?.kind === "agent") return undefined;
   const c = m.content ?? {};
   if (c.type === "text" && typeof c.text === "string") {
-    const emoji = parseTapbackText(c.text);
-    return emoji ? { handle, kind: "reaction", emoji } : { handle, kind: "text", text: c.text };
+    // Tapbacks arrive as text (e.g. „…“ ein Herz hinzugefügt); the agent reads them like any message.
+    return { handle, kind: "text", text: c.text };
   }
   if (c.type === "reaction" && typeof c.reaction === "string") return { handle, kind: "reaction", emoji: c.reaction };
   return { handle, kind: "other" };

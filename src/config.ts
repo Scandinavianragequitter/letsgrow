@@ -7,8 +7,14 @@ function num(name: string, fallback: number): number {
 export const config = {
   port: num("PORT", 3000),
   publicBaseUrl: (process.env.PUBLIC_BASE_URL ?? "http://localhost:3000").replace(/\/$/, ""),
-  anthropicKey: process.env.ANTHROPIC_API_KEY ?? "",
-  anthropicModel: process.env.ANTHROPIC_MODEL ?? "claude-sonnet-5-5",
+  // LLM: Anthropic or any OpenRouter model. LLM_PROVIDER picks one; if empty, whichever key is set.
+  llm: {
+    provider: process.env.LLM_PROVIDER ?? "",
+    anthropicKey: process.env.ANTHROPIC_API_KEY ?? "",
+    anthropicModel: process.env.ANTHROPIC_MODEL || "claude-sonnet-5-5",
+    openrouterKey: process.env.OPENROUTER_API_KEY ?? "",
+    openrouterModel: process.env.OPENROUTER_MODEL || "openrouter/free",
+  },
   messenger: (process.env.MESSENGER ?? "console") as "console" | "photon",
   // Photon Beta (2.0): project ID (pho_prj_...) + project API key. PROJECT_ID is accepted as an alias.
   projectId: process.env.PHOTON_PROJECT_ID || process.env.PROJECT_ID || "",

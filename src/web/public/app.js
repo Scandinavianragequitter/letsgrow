@@ -64,11 +64,10 @@ function signupView() {
 }
 
 function chatCard() {
-  const locked = S.habit && S.habit.status !== "planning";
   const log = h("div", { class: "chat", id: "chatlog" });
   if (!S.chat.length) log.append(h("div", { class: "bubble assistant" }, `Hi ${S.user.name}! What healthy habit do you want to build? For example: “I want to spend less time on Instagram, under an hour a day” or “I want to stretch before and after every training”.`));
-  for (const m of S.chat) log.append(h("div", { class: `bubble ${m.role}` }, m.content));
-  const input = h("input", { id: "msg", placeholder: locked ? "Habit is running. Start over to plan a new one." : "Describe your habit…", disabled: locked });
+  for (const m of S.chat) log.append(h("div", { class: `bubble ${m.role}` }, m.content, m.channel === "imessage" ? h("div", { class: "via" }, "iMessage") : null));
+  const input = h("input", { id: "msg", placeholder: S.habit?.status === "active" ? "Ask about your progress, change the plan…" : "Describe your habit…" });
   const send = async () => {
     const t = input.value.trim(); if (!t || busy) return;
     input.value = ""; S.chat.push({ role: "user", content: t }); render(true);
@@ -77,7 +76,7 @@ function chatCard() {
   };
   input.onkeydown = (e) => { if (e.key === "Enter") send(); };
   queueMicrotask(() => { log.scrollTop = log.scrollHeight; });
-  return h("div", { class: "card" }, h("h2", {}, "Your habit agent"), log, h("div", { class: "row" }, input, h("button", { onclick: send, disabled: locked }, "Send")));
+  return h("div", { class: "card" }, h("h2", {}, "Your habit agent"), log, h("div", { class: "row" }, input, h("button", { onclick: send }, "Send")));
 }
 
 function planCard() {

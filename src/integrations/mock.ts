@@ -1,5 +1,5 @@
 import type { Store } from "../db.js";
-import { weekday, zonedTime } from "../clock.js";
+import { addDays, weekday, zonedTime } from "../clock.js";
 
 // Mock data sources for the demo. The real versions would call Apple Screen Time
 // (only reachable through an iOS app using FamilyControls), HealthKit / Google Health,
@@ -7,11 +7,34 @@ import { weekday, zonedTime } from "../clock.js";
 
 export interface CalEvent { title: string; startMs: number; endMs: number }
 
+export type SourceId = "screen_time" | "health" | "calendar";
+
+export interface SourceInfo {
+  source: SourceId;
+  connected: boolean;
+  /** "measure": can verify a habit with no user effort. "context": helps time reminders. */
+  use: "measure" | "context";
+  metrics?: string[];
+  notes: string;
+}
+
+export interface ProbeRequest { source: SourceId; metric?: string; keyword?: string }
+
 export interface Integrations {
   /** Numeric reading for a metric on a day, or null if the source has no data. */
   metric(userId: string, source: string, metric: string, day: string): number | null;
   events(userId: string, day: string, tz: string): CalEvent[];
-  describe(): string;
+  /** What this user has connected. The agent reads this instead of a hardcoded description. */
+  catalog(userId: string): SourceInfo[];
+  /** Look at this user's actual data so plans are grounded in what exists. */
+  probe(userId: string, tz: string, today: string, req: ProbeRequest): unknown;
+}
+
+const SCREEN_TIME_APPS = ["Instagram", "TikTok", "YouTube", "WhatsApp", "Safari", "X", "Reddit"];
+const HEALTH_METRICS = ["steps", "workout_minutes", "sleep_hours", "mindful_minutes"];
+
+function localTime(ms: number, tz: string) {
+  return new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }).format(ms);
 }
 
 function hash(s: string): number {
@@ -29,13 +52,40 @@ function rand(seed: string): number {
 export class MockIntegrations implements Integrations {
   constructor(private store: Store, private autofill: boolean) {}
 
-  describe(): string {
+  catalog(_userId: string): SourceInfo[] {
     return [
-      "screen_time (autonomous): metrics `app_minutes:<AppName>` (e.g. app_minutes:Instagram), `total_minutes`, `pickups`. Daily totals.",
-      "health (autonomous): metrics `steps`, `workout_minutes`, `sleep_hours`, `mindful_minutes`. Daily totals.",
-      "calendar (read-only): the user's events with title, start and end. Use it to anchor reminders to real events (e.g. a training session).",
-      "imessage (outbound): can text the user. A single heart tapback or one-word reply is the cheapest confirmation for the user.",
-    ].join("\n");
+      { source: "screen_time", connected: true, use: "measure", metrics: ["app_minutes:<AppName>", "total_minutes", "pickups"],
+        notes: "Daily totals per app from Screen Time. Demo data." },
+      { source: "health", connected: true, use: "measure", metrics: HEALTH_METRICS,
+        notes: "Daily totals from the health app. Demo data." },
+      { source: "calendar", connected: true, use: "context",
+        notes: "The user's events (title, start, end). Use to time reminders around real events. Demo data." },
+    ];
+  }
+
+  probe(userId: string, tz: string, today: string, req: ProbeRequest): unknown {
+    const past = Array.from({ length: 7 }, (_, i) => addDays(today, i - 7));
+    const series = (source: string, metric: string) =>
+      past.map((day) => ({ day, value: this.metric(userId, source, metric, day) }));
+    if (req.source === "screen_time" || req.source === "health") {
+      if (req.metric) return { source: req.source, metric: req.metric, last7Days: series(req.source, req.metric) };
+      const metrics = req.source === "screen_time"
+        ? [...SCREEN_TIME_APPS.map((a) => `app_minutes:${a}`), "total_minutes", "pickups"]
+        : HEALTH_METRICS;
+      return {
+        source: req.source,
+        dailyAverageLast7Days: Object.fromEntries(metrics.map((m) => {
+          const v = series(req.source, m).map((x) => x.value).filter((x): x is number => x !== null);
+          return [m, v.length ? Math.round(v.reduce((a, b) => a + b, 0) / v.length) : null];
+        })),
+      };
+    }
+    const days = Array.from({ length: 14 }, (_, i) => addDays(today, i));
+    const kw = req.keyword?.toLowerCase();
+    const events = days.flatMap((d) => this.events(userId, d, tz))
+      .filter((e) => !kw || e.title.toLowerCase().includes(kw))
+      .map((e) => ({ title: e.title, start: localTime(e.startMs, tz), end: localTime(e.endMs, tz) }));
+    return { source: "calendar", window: `${today} + 14 days`, keyword: req.keyword ?? null, count: events.length, events: events.slice(0, 30) };
   }
 
   metric(userId: string, _source: string, metric: string, day: string): number | null {

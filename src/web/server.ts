@@ -6,11 +6,10 @@ import { dirname, join } from "node:path";
 import type { Store, UserRow, HabitRow } from "../db.js";
 import type { Clock } from "../clock.js";
 import { HOUR, dayKey, zonedTime } from "../clock.js";
-import type { Planner } from "../agent/planner.js";
 import type { HabitPlan } from "../agent/plan.js";
 import type { Scheduler } from "../engine/scheduler.js";
-import type { InboundRouter } from "../engine/inbound.js";
-import type { Planning } from "../engine/planning.js";
+import type { LetsGrowAgent } from "../agent/agent.js";
+import { INVITE_TEXT, type HabitActions } from "../engine/actions.js";
 import type { LineAssigner } from "../messaging/assigner.js";
 import { ConsoleMessenger, type Messenger } from "../messaging/messenger.js";
 import { PRESETS, policyFromPreset, policyFromSuggestion, type EscalationPolicy } from "../policy/escalation.js";
@@ -20,15 +19,17 @@ import { normalizePhone } from "../phone.js";
 import { config } from "../config.js";
 
 export interface AppDeps {
-  store: Store; clock: Clock; planner: Planner; scheduler: Scheduler; router: InboundRouter;
-  messenger: Messenger; assigner: LineAssigner; devPanel: boolean; planning: Planning;
+  /** Set in console mode so the dev panel can pretend a phone texted the line. */
+  consoleTransport?: ConsoleMessenger;
+  store: Store; clock: Clock; agent: LetsGrowAgent; actions: HabitActions; scheduler: Scheduler;
+  messenger: Messenger; assigner: LineAssigner; devPanel: boolean;
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
 const asset = (f: string) => readFileSync(join(here, "public", f), "utf8");
-export const INVITE_TEXT = "Remind me if I'm late on my new healthy habit. Let's grow!";
 
 export function createApp(d: AppDeps) {
+  const consoleTransport = d.consoleTransport;
   const { store, clock } = d;
   const app = new Hono();
 
@@ -77,7 +78,7 @@ export function createApp(d: AppDeps) {
         escalation: JSON.parse(habit.escalation_json) as EscalationPolicy,
       },
       plan,
-      chat: store.chat(user.id).map((m) => ({ role: m.role, content: m.content })),
+      chat: store.chat(user.id).map((m) => ({ role: m.role, content: m.content, channel: m.channel })),
       days: habit ? store.days(habit.id).map((x) => ({ day: x.day, status: x.status, detail: x.detail })) : [],
       stats, friends,
       invite: inviteUrl && { url: inviteUrl, text: `${INVITE_TEXT} ${inviteUrl}`, sms: `sms:&body=${encodeURIComponent(`${INVITE_TEXT} ${inviteUrl}`)}` },
@@ -124,22 +125,26 @@ export function createApp(d: AppDeps) {
     const text = (message ?? "").trim();
     if (!text) return c.json({ error: "empty message" }, 400);
 
-    const habit = store.currentHabit(user.id);
-    if (habit && habit.status !== "planning") return c.json({ error: "You already have a habit running. Start over to plan a new one." }, 409);
-    try {
-      await d.planning.turn(user, text);
-      return c.json(view(user));
-    } catch (err) {
-      return c.json({ error: (err as Error).message }, 503);
-    }
+    await d.agent.chat(user, text);
+    return c.json(view(user));
   });
 
   app.post("/api/habit/start", async (c) => {
     const user = userOf(c);
-    const started = user && d.planning.start(user);
-    if (!user || !started) return c.json({ error: "No plan to start yet." }, 400);
+    if (!user) return c.json({ error: "not signed in" }, 401);
+    let started;
+    try { started = d.actions.start(user); }
+    catch (err) { return c.json({ error: (err as Error).message }, 400); }
     const now = clock.now();
-    try { if (d.messenger.mode === "console" || user.connected) await d.messenger.send(user.phone, msg.userStarted(started.title, started.days)); } catch { /* not connected yet */ }
+    if (d.messenger.mode === "console" || user.connected) {
+      const text = await d.agent.write({
+        to: user.name,
+        purpose: "They just started their habit from the website. Confirm it started, say what happens next in one sentence, and ask them to forward the invite message to a friend.",
+        facts: { habit: started.plan.title, summary: started.plan.summary, days: started.habit.duration_days, inviteMessageToForward: started.inviteMessage },
+        fallback: msg.userStarted(started.plan.title, started.habit.duration_days),
+      });
+      try { await d.messenger.send(user.phone, text); } catch { /* not reachable yet */ }
+    }
     await d.scheduler.tick(now);
     return c.json(view(user));
   });
@@ -149,7 +154,6 @@ export function createApp(d: AppDeps) {
     const habit = user && store.currentHabit(user.id);
     if (!user) return c.json({ error: "not signed in" }, 401);
     if (habit) store.setHabitStatus(habit.id, "cancelled");
-    store.clearChat(user.id);
     return c.json(view(user));
   });
 
@@ -229,8 +233,8 @@ export function createApp(d: AppDeps) {
       const user = need(c);
       if (!user) return c.json({ error: "not signed in" }, 401);
       const e = await c.req.json<{ handle: string; kind: "text" | "reaction"; text?: string; emoji?: string }>();
-      if (d.messenger instanceof ConsoleMessenger) await d.messenger.simulateInbound(e);
-      else await d.router.handle(e);
+      if (d.messenger.mode === "console" && consoleTransport) await consoleTransport.simulateInbound(e);
+      else await d.agent.onInbound(e);
       return c.json(view(user));
     });
     app.get("/api/dev/outbox", (c) => c.json(store.recentMessages(80)));

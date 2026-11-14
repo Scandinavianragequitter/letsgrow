@@ -1,31 +1,23 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Store } from "../src/db.js";
 import { Clock } from "../src/clock.js";
-import { MockIntegrations } from "../src/integrations/mock.js";
-import { ConsoleMessenger } from "../src/messaging/messenger.js";
 import { ConsoleAssigner } from "../src/messaging/assigner.js";
-import { Scheduler } from "../src/engine/scheduler.js";
-import { InboundRouter } from "../src/engine/inbound.js";
-import { Planner } from "../src/agent/planner.js";
-import type { LlmClient } from "../src/agent/llm.js";
+import { HabitActions } from "../src/engine/actions.js";
 import { createApp } from "../src/web/server.js";
-import { Planning } from "../src/engine/planning.js";
-import { instagramPlan } from "./helpers.js";
+import { instagramPlan, setup } from "./helpers.js";
+import { ScriptedLlm, call } from "./fake-llm.js";
 
 function build() {
-  const store = new Store(":memory:");
+  // The model's decisions are scripted; everything else is the real app.
+  const llm = new ScriptedLlm((c) => c.messages.some((m) => m.role === "tool")
+    ? { text: "I'll check Screen Time each evening. Nothing for you to do.", toolCalls: [] }
+    : call("propose_plan", { plan: instagramPlan, habit_in_their_words: "less Instagram" }));
+  const s = setup(true, llm);
   const clock = new Clock(1);
-  const messenger = new ConsoleMessenger(store, () => clock.now());
-  const integrations = new MockIntegrations(store, true);
-  const llm: LlmClient = { async complete() { return { text: "I'll check Screen Time each evening. Nothing for you to do.", toolCalls: [{ name: "propose_plan", input: instagramPlan }] }; } };
-  const planner = new Planner(llm, integrations);
-  const planning = new Planning({ store, planner, durationDays: 60, now: () => clock.now() });
-  const router = new InboundRouter(store, messenger, () => clock.now(), { planning, inviteText: (t) => `Let's grow! http://x/join/${t}` });
-  void messenger.start((e) => router.handle(e));
-  const scheduler = new Scheduler({ store, integrations, messenger, publicBaseUrl: "http://localhost:3000" });
-  const app = createApp({ store, clock, planner, scheduler, router, messenger, assigner: new ConsoleAssigner("+16289988199"), devPanel: true, planning });
-  return { app, store, messenger };
+  const consoleTransport = s.transport;
+  const app = createApp({ store: s.store, clock, agent: s.agent, actions: new HabitActions({ store: s.store, durationDays: 60, publicBaseUrl: "http://localhost:3000", now: () => clock.now() }),
+    scheduler: s.scheduler, messenger: s.messenger, assigner: new ConsoleAssigner("+16289988199"), devPanel: true, consoleTransport });
+  return { app, store: s.store };
 }
 
 test("full product flow over HTTP", async () => {
@@ -64,7 +56,6 @@ test("full product flow over HTTP", async () => {
   const started = await call("/api/habit/start", "POST");
   assert.equal(started.json.habit.status, "active");
   assert.match(started.json.invite.text, /Remind me if I'm late on my new healthy habit\. Let's grow! http/);
-  assert.equal((await call("/api/chat", "POST", { message: "again" })).status, 409);
 
   // friend joins via the link
   const token = started.json.invite.url.split("/").pop();
@@ -92,20 +83,3 @@ test("full product flow over HTTP", async () => {
   assert.equal(re.json.habit?.status === "active", false);
 });
 
-test("planning and starting a habit over iMessage", async () => {
-  const { app, store, messenger } = build();
-  const res = await app.request("/api/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Carl", phone: "+1 540 449 2120" }) });
-  assert.equal(res.status, 200);
-  const phone = "+15404492120";
-  const out = () => store.recentMessages(100).filter((m) => m.direction === "out" && m.handle === phone).map((m) => m.body);
-  await messenger.simulateInbound({ handle: phone, kind: "text", text: "Hi" });
-  assert.match(out().at(-1)!, /What habit do you want to build/);
-  await messenger.simulateInbound({ handle: phone, kind: "text", text: "I want to spend less time on Instagram" });
-  assert.match(out().at(-1)!, /Screen Time[\s\S]*Reply "start"/);
-  const user = store.getUserByPhone(phone)!;
-  assert.equal(store.currentHabit(user.id)!.status, "planning");
-  assert.equal(store.chat(user.id).length, 2, "same chat history as the website");
-  await messenger.simulateInbound({ handle: phone, kind: "text", text: "start" });
-  assert.equal(store.currentHabit(user.id)!.status, "active");
-  assert.match(out().at(-1)!, /starts today[\s\S]*Let's grow! http:\/\/x\/join\//);
-});
