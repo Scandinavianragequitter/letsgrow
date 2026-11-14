@@ -20,7 +20,7 @@ const el = (t, a = {}, ...kids) => { const e = document.createElement(t); for (c
   if (!r.ok) { root.append(el("div", { class: "card" }, info.error || "Invite not found.")); return; }
   const card = el("div", { class: "card" });
   card.append(el("h1", {}, `${info.userName} wants you in their corner`));
-  card.append(el("p", { class: "mute" }, `For the next ${info.days} days they're working on “${info.title}”. Their agent will only text you if they slip, so you can send some support. That's all.`));
+  card.append(el("p", { class: "mute" }, `For the next ${info.days} days they're building a new habit. You'll only hear from their agent if they slip, and that's when you'll find out what it is, so you can send some support. That's all.`));
   const name = el("input", { placeholder: "Your first name", autocomplete: "given-name" });
   const phone = el("input", { placeholder: "Your iMessage number, e.g. +1 555 123 4567", type: "tel" });
   const err = el("div", { class: "err" });

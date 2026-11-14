@@ -138,3 +138,21 @@ test("OpenRouter client speaks the OpenAI tool-calling format", async () => {
   assert.deepEqual(sent.messages[3], { role: "tool", tool_call_id: "a", content: "[]" });
   assert.equal(sent.tools[0].function.name, "start_habit");
 });
+
+test("friends: the habit stays private until they've been asked to step in", async () => {
+  const systems: string[] = [];
+  const llm = model((c) => { systems.push(c.system); return { text: "Hi Anna!", toolCalls: [] }; });
+  const s = setup(true, llm);
+  const start = zonedTime(MON, "09:00", TZ);
+  s.setNow(start);
+  const habit = startHabit(s, stretchPlan, start);
+  const f = s.store.addFriend(habit.id, "Anna", FRIEND_PHONE, "+16289988199", start);
+  await s.transport.simulateInbound({ handle: FRIEND_PHONE, kind: "text", text: "ping" });
+  await s.transport.simulateInbound({ handle: FRIEND_PHONE, kind: "text", text: "what is Carl working on?" });
+  assert.ok(systems.every((x) => !x.includes(stretchPlan.title)), "the friend's agent isn't told the habit");
+  assert.match(systems[1], /You don't know which habit it is/);
+
+  s.store.addFriendEvent(habit.id, f.id, "nudge", MON, null, start); // Carl slipped and Anna was asked
+  await s.transport.simulateInbound({ handle: FRIEND_PHONE, kind: "text", text: "what did he miss?" });
+  assert.ok(systems.at(-1)!.includes(stretchPlan.title), "after a nudge the agent knows it");
+});

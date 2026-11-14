@@ -311,9 +311,15 @@ ${JSON.stringify(this.userState(user), null, 2)}`;
         },
       },
     ];
+    // The habit is private until the friend is needed: before the first nudge the agent isn't told
+    // what it is, so it can't let it slip however the friend asks.
+    const revealed = habitRevealedTo(store, habit, friend);
+    const habitLine = revealed
+      ? `for "${plan.title}"`
+      : `for a habit ${owner.name} is keeping private unless they slip. You don't know which habit it is; if asked, say ${friend.name} will find out only if ${owner.name} needs a nudge`;
     const help = friendHelp(store, habit.id).get(friend.id) ?? { nudges: 0, replies: 0 };
     const system = `${VOICE}
-You are ${owner.name}'s Let'sGrow agent, texting with ${friend.name} on iMessage. ${owner.name} asked ${friend.name} to be their accountability friend for "${plan.title}" (${habit.duration_days} days). You only text ${friend.name} when ${owner.name} slips, to ask for a short word of support, which you pass on. Keep it to a few short sentences.
+You are ${owner.name}'s Let'sGrow agent, texting with ${friend.name} on iMessage. ${owner.name} asked ${friend.name} to be their accountability friend ${habitLine} (${habit.duration_days} days). You only text ${friend.name} when ${owner.name} slips, to ask for a short word of support, which you pass on. Keep it to a few short sentences.
 Local time: ${this.fmt(now(), owner.tz)}.
 
 ## State
@@ -329,6 +335,11 @@ ${JSON.stringify({
 }
 
 const VOICE = `You are Let'sGrow, a warm, brief accountability agent that helps people build one healthy habit with a friend's support. Write like a thoughtful friend texting: plain sentences, no markdown, no bullet lists, no lecturing. Reply in the language the person writes in.`;
+
+/** A friend learns the habit once they've been asked to step in. */
+export function habitRevealedTo(store: Store, habit: HabitRow, friend: FriendRow): boolean {
+  return (friendHelp(store, habit.id).get(friend.id)?.nudges ?? 0) > 0;
+}
 
 function partyId(p: Exclude<Party, { kind: "unknown" }>) {
   return p.kind === "user" ? p.user.id : p.friend.id;

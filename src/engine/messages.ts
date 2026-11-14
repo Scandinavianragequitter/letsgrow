@@ -22,10 +22,11 @@ export const msg = {
   userCongrats: (name: string, title: string, days: number, done: number, counted: number, longest: number, friendLine: string) =>
     `${days} days. You did it, ${name}! "${title}": ${done} of ${counted} days on target, longest streak ${longest}. ${friendLine} That's real personal growth. Proud of you.`,
 
-  friendCongrats: (friend: string, user: string, title: string, days: number, nudges: number, replies: number) => {
+  friendCongrats: (friend: string, user: string, title: string | null, days: number, nudges: number, replies: number) => {
     const help = nudges === 0
       ? `${user} never needed a nudge, but knowing you were there helped.`
       : `I asked you to step in ${nudges} time${nudges === 1 ? "" : "s"} and you replied ${replies} time${replies === 1 ? "" : "s"}.`;
-    return `${friend}, ${user} just finished ${days} days of "${title}"! ${help} Part of that growth is yours. Thank you.`;
+    const what = title ? `${days} days of "${title}"` : `${days} days of their new habit`;
+    return `${friend}, ${user} just finished ${what}! ${help} Part of that growth is yours. Thank you.`;
   },
 };

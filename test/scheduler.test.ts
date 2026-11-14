@@ -184,3 +184,18 @@ test("completion is sent only once", async () => {
   for (let i = 0; i < 4; i++) await s.scheduler.tick(zonedTime(day, `0${i + 1}:00`, TZ));
   assert.equal(s.out(USER_PHONE).filter((m) => m.includes("3 days. You did it")).length, 1);
 });
+
+test("a friend who was never needed doesn't learn the habit, even at the end", async () => {
+  const s = setup(false);
+  const start = zonedTime(MON, "09:00", TZ);
+  s.setNow(start);
+  const habit = startHabit(s, instagramPlan, start, "immediate", 3);
+  await addActiveFriend(s, habit.id, start);
+  let day = MON;
+  for (let i = 0; i < 3; i++) { s.store.setSignal(s.user.id, day, "app_minutes:Instagram", 30); await s.scheduler.tick(zonedTime(day, "22:05", TZ)); day = addDays(day, 1); }
+  await s.scheduler.tick(zonedTime(day, "08:00", TZ));
+  const final = s.out(FRIEND_PHONE);
+  assert.equal(final.length, 1);
+  assert.match(final[0], /just finished 3 days of their new habit/);
+  assert.ok(!final[0].includes(instagramPlan.title));
+});

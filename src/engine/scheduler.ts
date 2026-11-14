@@ -213,9 +213,11 @@ export class Scheduler {
       try {
         await messenger.send(f.phone, await this.say({
           to: f.name,
-          purpose: `${user.name} finished their habit. Thank ${f.name}, tell them how often they helped, and that ${user.name} grew.`,
-          facts: { person: user.name, habit: plan.title, days: h.duration_days, timesAskedToHelp: r.nudges, timesReplied: r.replies, daysOnTarget: stats.done, daysCounted: stats.counted },
-          fallback: msg.friendCongrats(f.name, user.name, plan.title, h.duration_days, r.nudges, r.replies),
+          purpose: `${user.name} finished their habit. Thank ${f.name}, tell them how often they helped, and that ${user.name} grew.`
+            + (r.nudges === 0 ? ` ${f.name} was never needed, so ${user.name}'s habit stays private: don't guess or hint at what it was.` : ""),
+          // The habit stays private from a friend who was never needed.
+          facts: { person: user.name, ...(r.nudges > 0 ? { habit: plan.title } : {}), days: h.duration_days, timesAskedToHelp: r.nudges, timesReplied: r.replies, daysOnTarget: stats.done, daysCounted: stats.counted },
+          fallback: msg.friendCongrats(f.name, user.name, r.nudges > 0 ? plan.title : null, h.duration_days, r.nudges, r.replies),
         }));
         store.addFriendEvent(h.id, f.id, "final", null, null, now);
       } catch (err) { console.warn(`final message to ${f.id} failed:`, (err as Error).message); }

@@ -178,7 +178,8 @@ export function createApp(d: AppDeps) {
     const h = joinable(c.req.param("token"));
     if (!h) return c.json({ error: "This invite is not active." }, 404);
     const owner = store.getUser(h.user_id)!;
-    return c.json({ userName: owner.name, title: (JSON.parse(h.plan_json!) as HabitPlan).title, days: h.duration_days });
+    // The habit stays private until the friend is needed, so the invite page doesn't name it.
+    return c.json({ userName: owner.name, days: h.duration_days });
   });
 
   app.post("/api/join/:token", async (c) => {

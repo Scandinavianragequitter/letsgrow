@@ -61,6 +61,7 @@ test("full product flow over HTTP", async () => {
   const token = started.json.invite.url.split("/").pop();
   const info = await call(`/api/join/${token}`);
   assert.equal(info.json.userName, "Carl");
+  assert.equal(info.json.title, undefined, "the invite page doesn't reveal the habit");
   assert.equal((await call(`/api/join/${token}`, "POST", { name: "Anna", phone: "+15404492120" })).status, 400); // same phone as Carl
   const join = await call(`/api/join/${token}`, "POST", { name: "Anna", phone: "+1 555 000 2222" });
   assert.equal(join.status, 200);
