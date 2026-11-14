@@ -10,6 +10,7 @@ import type { Planner } from "../agent/planner.js";
 import type { HabitPlan } from "../agent/plan.js";
 import type { Scheduler } from "../engine/scheduler.js";
 import type { InboundRouter } from "../engine/inbound.js";
+import type { Planning } from "../engine/planning.js";
 import type { LineAssigner } from "../messaging/assigner.js";
 import { ConsoleMessenger, type Messenger } from "../messaging/messenger.js";
 import { PRESETS, policyFromPreset, policyFromSuggestion, type EscalationPolicy } from "../policy/escalation.js";
@@ -20,12 +21,12 @@ import { config } from "../config.js";
 
 export interface AppDeps {
   store: Store; clock: Clock; planner: Planner; scheduler: Scheduler; router: InboundRouter;
-  messenger: Messenger; assigner: LineAssigner; devPanel: boolean;
+  messenger: Messenger; assigner: LineAssigner; devPanel: boolean; planning: Planning;
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
 const asset = (f: string) => readFileSync(join(here, "public", f), "utf8");
-const INVITE_TEXT = "Remind me if I'm late on my new healthy habit. Let's grow!";
+export const INVITE_TEXT = "Remind me if I'm late on my new healthy habit. Let's grow!";
 
 export function createApp(d: AppDeps) {
   const { store, clock } = d;
@@ -123,19 +124,10 @@ export function createApp(d: AppDeps) {
     const text = (message ?? "").trim();
     if (!text) return c.json({ error: "empty message" }, 400);
 
-    let habit = store.currentHabit(user.id);
+    const habit = store.currentHabit(user.id);
     if (habit && habit.status !== "planning") return c.json({ error: "You already have a habit running. Start over to plan a new one." }, 409);
-    if (!habit) habit = store.createHabit(user.id, text, config.durationDays, JSON.stringify(policyFromPreset("standard")), clock.now());
-
-    const history = store.chat(user.id).map((m) => ({ role: m.role, content: m.content }));
     try {
-      const turn = await d.planner.turn(user.name, history, text);
-      store.addChat(user.id, "user", text, clock.now());
-      store.addChat(user.id, "assistant", turn.reply, clock.now());
-      if (turn.plan) {
-        store.setPlan(habit.id, JSON.stringify(turn.plan), turn.plan.title);
-        store.setEscalation(habit.id, JSON.stringify(policyFromSuggestion(turn.plan.suggestedMissedDaysBeforeFriendNudge)));
-      }
+      await d.planning.turn(user, text);
       return c.json(view(user));
     } catch (err) {
       return c.json({ error: (err as Error).message }, 503);
@@ -144,12 +136,10 @@ export function createApp(d: AppDeps) {
 
   app.post("/api/habit/start", async (c) => {
     const user = userOf(c);
-    const habit = user && store.currentHabit(user.id);
-    if (!user || !habit || habit.status !== "planning" || !habit.plan_json) return c.json({ error: "No plan to start yet." }, 400);
+    const started = user && d.planning.start(user);
+    if (!user || !started) return c.json({ error: "No plan to start yet." }, 400);
     const now = clock.now();
-    store.activateHabit(habit.id, dayKey(now, user.tz), now);
-    const plan = JSON.parse(habit.plan_json) as HabitPlan;
-    try { if (d.messenger.mode === "console" || user.connected) await d.messenger.send(user.phone, msg.userStarted(plan.title, habit.duration_days)); } catch { /* not connected yet */ }
+    try { if (d.messenger.mode === "console" || user.connected) await d.messenger.send(user.phone, msg.userStarted(started.title, started.days)); } catch { /* not connected yet */ }
     await d.scheduler.tick(now);
     return c.json(view(user));
   });

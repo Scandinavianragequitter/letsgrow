@@ -3,11 +3,18 @@
 const pick = <T,>(arr: T[], i: number) => arr[Math.abs(i) % arr.length];
 
 export const msg = {
+  userConnectedNoHabit: (name: string) =>
+    `Hey ${name}, you're connected. What habit do you want to build? Tell me here or on the website, e.g. "less Instagram, under an hour a day".`,
   userConnected: (name: string, title: string) =>
     `Hey ${name}, you're connected. I'll use this thread for "${title}": reminders when I need you, and a heads-up if something needs attention. React ❤️ to a reminder (or reply "done") when you've done it.`,
 
   userStarted: (title: string, days: number) =>
     `"${title}" starts today. ${days} days. Send your friend the link from the app so someone has your back.`,
+
+  planReady: '\n\nReply "start" to begin, or tell me what to change.',
+  planFailed: "Sorry, I couldn't work that out just now. Try again in a minute, or use the website.",
+  userStartedWithInvite: (title: string, days: number, inviteText: string) =>
+    `"${title}" starts today. ${days} days. Forward the next message to a friend so someone has your back.\n\n${inviteText}`,
 
   userAck: "Logged. Nice work.",
   userAutoTracked: "I'm tracking this one automatically, nothing to report. Keep going.",

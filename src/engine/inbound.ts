@@ -1,14 +1,22 @@
-import type { Store } from "../db.js";
+import type { Store, UserRow } from "../db.js";
 import type { HabitPlan } from "../agent/plan.js";
 import type { InboundEvent, Messenger } from "../messaging/messenger.js";
 import { msg } from "./messages.js";
+import type { Planning } from "./planning.js";
 
 const HEARTS = new Set(["❤️", "❤", "♥️", "💕", "💖", "😍", "love", "heart", "👍", "✅"]);
+const START = /^(start|let'?s go|go|yes|yep|ok(ay)?|sounds good|do it)[.! ]*$/i;
 const DONE = /^(done|did it|yes|yep|y|✅|👍|❤️|❤|finished|check)[.! ]*$/i;
 
 /** Routes inbound texts/tapbacks: user confirmations and friend replies. */
 export class InboundRouter {
-  constructor(private store: Store, private messenger: Messenger, private now: () => number) {}
+  constructor(
+    private store: Store,
+    private messenger: Messenger,
+    private now: () => number,
+    /** Lets people plan and start a habit over iMessage. Optional so tests can leave it out. */
+    private planning?: { planning: Planning; inviteText: (token: string) => string },
+  ) {}
 
   async handle(e: InboundEvent): Promise<void> {
     const now = this.now();
@@ -35,10 +43,14 @@ export class InboundRouter {
       const habit = store.currentHabit(user.id);
       const plan = habit?.plan_json ? (JSON.parse(habit.plan_json) as HabitPlan) : undefined;
       if (first) {
-        await messenger.send(e.handle, msg.userConnected(user.name, plan?.title ?? "your habit"));
+        await messenger.send(e.handle, plan && habit?.status === "active" ? msg.userConnected(user.name, plan.title) : msg.userConnectedNoHabit(user.name));
         return;
       }
-      if (!habit || habit.status !== "active" || !plan) return;
+      if (!habit || habit.status === "planning") {
+        await this.planOverText(user, e, !!plan);
+        return;
+      }
+      if (habit.status !== "active" || !plan) return;
       const isConfirm =
         (e.kind === "reaction" && !!e.emoji && HEARTS.has(e.emoji)) ||
         (e.kind === "text" && !!e.text && DONE.test(e.text.trim()));
@@ -65,6 +77,24 @@ export class InboundRouter {
       store.addFriendEvent(habit.id, friend.id, "support_reply", null, body, now);
       if (e.kind === "text") await messenger.send(e.handle, msg.friendThanks(owner.name));
       await messenger.send(owner.phone, e.kind === "text" ? msg.relayToUser(friend.name, body) : msg.relayReactionToUser(friend.name, body));
+    }
+  }
+
+  /** No habit running yet: the text goes to the planning agent, and "start" starts the proposed plan. */
+  private async planOverText(user: UserRow, e: InboundEvent, hasPlan: boolean) {
+    const text = e.kind === "text" ? (e.text ?? "").trim() : "";
+    if (!text || !this.planning) return;
+    const { planning, inviteText } = this.planning;
+    if (hasPlan && START.test(text)) {
+      const s = planning.start(user);
+      if (s) { await this.messenger.send(user.phone, msg.userStartedWithInvite(s.title, s.days, inviteText(s.inviteToken))); return; }
+    }
+    try {
+      const t = await planning.turn(user, text);
+      await this.messenger.send(user.phone, t.reply + (t.plan ? msg.planReady : ""));
+    } catch (err) {
+      console.error("planning over iMessage failed:", (err as Error).message);
+      await this.messenger.send(user.phone, msg.planFailed);
     }
   }
 }

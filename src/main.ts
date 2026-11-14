@@ -10,7 +10,8 @@ import { InboundRouter } from "./engine/inbound.js";
 import { ConsoleMessenger, type Messenger } from "./messaging/messenger.js";
 import { PhotonBetaMessenger, photonClient } from "./messaging/photon-beta.js";
 import { ConsoleAssigner, PhotonAssigner, type LineAssigner } from "./messaging/assigner.js";
-import { createApp } from "./web/server.js";
+import { createApp, INVITE_TEXT } from "./web/server.js";
+import { Planning } from "./engine/planning.js";
 
 const store = new Store(config.dbPath);
 const clock = new Clock(config.timeScale);
@@ -33,12 +34,15 @@ if (config.messenger === "photon") {
   assigner = new ConsoleAssigner(config.sharedLineNumber);
 }
 
-const router = new InboundRouter(store, messenger, () => clock.now());
+const planning = new Planning({ store, planner, durationDays: config.durationDays, now: () => clock.now() });
+const router = new InboundRouter(store, messenger, () => clock.now(), {
+  planning, inviteText: (token) => `${INVITE_TEXT} ${config.publicBaseUrl}/join/${token}`,
+});
 await messenger.start((e) => router.handle(e));
 const scheduler = new Scheduler({ store, integrations, messenger, publicBaseUrl: config.publicBaseUrl });
 
 const devPanel = config.messenger === "console" || process.env.DEV_PANEL === "1";
-const app = createApp({ store, clock, planner, scheduler, router, messenger, assigner, devPanel });
+const app = createApp({ store, clock, planner, scheduler, router, messenger, assigner, devPanel, planning });
 
 setInterval(() => { void scheduler.tick(clock.now()); }, config.tickMs);
 serve({ fetch: app.fetch, port: config.port }, () => {
