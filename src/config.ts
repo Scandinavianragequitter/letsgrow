@@ -10,8 +10,8 @@ export const config = {
   anthropicKey: process.env.ANTHROPIC_API_KEY ?? "",
   anthropicModel: process.env.ANTHROPIC_MODEL ?? "claude-sonnet-5-5",
   messenger: (process.env.MESSENGER ?? "console") as "console" | "photon",
-  projectId: process.env.PROJECT_ID ?? "",
-  projectSecret: process.env.PROJECT_SECRET ?? "",
+  // Photon Beta (2.0): project ID (pho_prj_...) + project API key. PROJECT_ID is accepted as an alias.
+  projectId: process.env.PHOTON_PROJECT_ID || process.env.PROJECT_ID || "",
   photonApiKey: process.env.PHOTON_API_KEY ?? "",
   sharedLineNumber: process.env.SHARED_LINE_NUMBER ?? "+16289988199",
   durationDays: num("DURATION_DAYS", 60),

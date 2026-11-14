@@ -181,6 +181,20 @@ export class Store {
   logMessage(direction: "out" | "in", handle: string, body: string, now: number) {
     this.run("INSERT INTO outbox(direction,handle,body,created_at) VALUES(?,?,?,?)", direction, handle, body, now);
   }
+  // Photon Beta: where to reach each handle (learned from their inbound texts) + small key/value state
+  setContact(handle: string, spaceId: string, agentId: string, now: number) {
+    this.run("INSERT INTO contacts(handle,space_id,agent_id,updated_at) VALUES(?,?,?,?) ON CONFLICT(handle) DO UPDATE SET space_id=excluded.space_id, agent_id=excluded.agent_id, updated_at=excluded.updated_at", handle, spaceId, agentId, now);
+  }
+  getContact(handle: string) {
+    return this.get<{ handle: string; space_id: string; agent_id: string }>("SELECT handle,space_id,agent_id FROM contacts WHERE handle=?", handle);
+  }
+  anyAgentId() { return this.get<{ agent_id: string }>("SELECT agent_id FROM contacts ORDER BY updated_at DESC LIMIT 1")?.agent_id; }
+  getKv(key: string) { return this.get<{ value: string }>("SELECT value FROM kv WHERE key=?", key)?.value; }
+  setKv(key: string, value: string) { this.run("INSERT INTO kv(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, value); }
+  markSeen(id: string, now: number): boolean {
+    return Number(this.run("INSERT OR IGNORE INTO seen_messages(id,seen_at) VALUES(?,?)", id, now).changes) > 0;
+  }
+
   recentMessages(limit = 60) {
     return this.all<OutboxRow>("SELECT * FROM (SELECT * FROM outbox ORDER BY id DESC LIMIT ?) ORDER BY id", limit);
   }
@@ -199,5 +213,8 @@ CREATE TABLE IF NOT EXISTS friend_events(id INTEGER PRIMARY KEY AUTOINCREMENT, h
 CREATE TABLE IF NOT EXISTS pending_nudges(id INTEGER PRIMARY KEY AUTOINCREMENT, habit_id TEXT NOT NULL, day TEXT NOT NULL, send_at INTEGER NOT NULL, sent_at INTEGER, note TEXT);
 CREATE TABLE IF NOT EXISTS signals(user_id TEXT NOT NULL, day TEXT NOT NULL, key TEXT NOT NULL, value REAL NOT NULL, PRIMARY KEY(user_id, day, key));
 CREATE TABLE IF NOT EXISTS mock_events(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, day TEXT NOT NULL, title TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS contacts(handle TEXT PRIMARY KEY, space_id TEXT NOT NULL, agent_id TEXT NOT NULL, updated_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS seen_messages(id TEXT PRIMARY KEY, seen_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS outbox(id INTEGER PRIMARY KEY AUTOINCREMENT, direction TEXT NOT NULL, handle TEXT NOT NULL, body TEXT NOT NULL, created_at INTEGER NOT NULL);
 `;

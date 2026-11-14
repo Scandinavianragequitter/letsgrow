@@ -4,7 +4,7 @@ const pick = <T,>(arr: T[], i: number) => arr[Math.abs(i) % arr.length];
 
 export const msg = {
   userConnected: (name: string, title: string) =>
-    `Hey ${name}, you're connected. I'll use this thread for "${title}": reminders when I need you, and a heads-up if something needs attention. React ❤️ to a reminder when you've done it.`,
+    `Hey ${name}, you're connected. I'll use this thread for "${title}": reminders when I need you, and a heads-up if something needs attention. React ❤️ to a reminder (or reply "done") when you've done it.`,
 
   userStarted: (title: string, days: number) =>
     `"${title}" starts today. ${days} days. Send your friend the link from the app so someone has your back.`,

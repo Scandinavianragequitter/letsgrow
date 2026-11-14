@@ -35,7 +35,15 @@ interface EscalationPolicy {
 Presets (`immediate`, `standard`, `two_in_a_row`, `gentle`) are in the same file. The policy is stored per habit: the planner suggests one, the user can change it in the UI (or `PATCH /api/habit/escalation`), and `decideNudge()` is a pure function covered by tests (`test/policy.test.ts`).
 
 ## Real iMessage (Photon)
-Set in `.env`: `MESSENGER=photon`, `PROJECT_ID`, `PROJECT_SECRET` (Spectrum), `SHARED_LINE_NUMBER`, and `PHOTON_API_KEY` (a project API key with `platforms:write`, used to assign users and friends to the shared line). `PUBLIC_BASE_URL` must be reachable from your friend's phone (ngrok / cloudflared); `localhost` only works on your own machine.
+This uses **Photon Beta (2.0)** (app.beta.photon.codes). Set in `.env`: `MESSENGER=photon`, `PHOTON_PROJECT_ID` (Settings, starts with `pho_prj_`), `PHOTON_API_KEY` (a project API key with `project:read`, `project:write` and `platforms:write`), and `SHARED_LINE_NUMBER`. No project secret is needed.
+
+How it talks to Photon (`src/messaging/photon-beta.ts`):
+- Signup and friend joins assign the person to the shared line via the API (no dashboard step).
+- Inbound texts are polled from `listMessages` every 3 s (Beta webhooks can't reach localhost). A saved cursor plus a seen-message table means restarts neither miss nor repeat messages.
+- Replies go out with `sendMessage` into the conversation learned from that person's first text. A shared line can't text first, so everyone texts the line once ("hi" / "ping").
+- Beta has no tapback events, but iOS forwards a tapback as text (`Loved “…”`, `„…“ ein Herz hinzugefügt`); those are turned back into reactions, so "react ❤️" still works. Replying "done" also counts.
+
+`PUBLIC_BASE_URL` must be reachable from your friend's phone (ngrok / cloudflared); `localhost` only works on your own machine.
 
 Shared-line rules that shape the product: direct chats only, and the agent can only text someone who is assigned **and has texted the line first**. That's why signup asks you to text "hi" and the join page asks friends to text "ping". Reminders wait until you've connected.
 
@@ -51,7 +59,7 @@ src/agent/        planner (Claude tool-use), plan schema, LLM clients
 src/engine/       scheduler, verifier, inbound routing, copy, stats
 src/policy/       escalation policy and presets
 src/integrations/ mock Screen Time / Health / Calendar
-src/messaging/    console + Photon messengers, shared-line assigner
+src/messaging/    console + Photon Beta messengers, shared-line assigner
 src/web/          Hono server + static UI
 test/             node:test (policy, clock, scheduler incl. a full 60-day run, planner, HTTP flow)
 ```

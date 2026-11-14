@@ -175,7 +175,12 @@ function devPanel() {
 }
 
 function render(force) {
-  if (!S || !S.user) return signupView();
+  if (!S || !S.user) {
+    // Build the signup form once; rebuilding it on every poll wiped what the user typed.
+    if (!document.getElementById("su-name")) signupView();
+    lastJson = null;
+    return;
+  }
   const json = JSON.stringify([S, outbox]);
   if (!force && json === lastJson) return;
   lastJson = json;

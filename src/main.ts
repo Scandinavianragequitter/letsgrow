@@ -8,7 +8,7 @@ import { Planner } from "./agent/planner.js";
 import { Scheduler } from "./engine/scheduler.js";
 import { InboundRouter } from "./engine/inbound.js";
 import { ConsoleMessenger, type Messenger } from "./messaging/messenger.js";
-import { createPhotonMessenger } from "./messaging/imessage.js";
+import { PhotonBetaMessenger, photonClient } from "./messaging/photon-beta.js";
 import { ConsoleAssigner, PhotonAssigner, type LineAssigner } from "./messaging/assigner.js";
 import { createApp } from "./web/server.js";
 
@@ -22,15 +22,12 @@ const planner = new Planner(llm, integrations);
 let messenger: Messenger;
 let assigner: LineAssigner;
 if (config.messenger === "photon") {
-  if (!config.projectId || !config.projectSecret) {
-    console.error("MESSENGER=photon needs PROJECT_ID and PROJECT_SECRET in .env");
+  if (!config.projectId || !config.photonApiKey) {
+    console.error("MESSENGER=photon needs PHOTON_PROJECT_ID (pho_prj_...) and PHOTON_API_KEY in .env");
     process.exit(1);
   }
-  messenger = await createPhotonMessenger(config.projectId, config.projectSecret);
-  assigner = config.photonApiKey
-    ? new PhotonAssigner(config.photonApiKey, config.projectId, config.sharedLineNumber)
-    : new ConsoleAssigner(config.sharedLineNumber);
-  if (!config.photonApiKey) console.warn("PHOTON_API_KEY not set: friends and users are NOT auto-assigned to the shared line. Assign them in the Photon dashboard.");
+  messenger = new PhotonBetaMessenger({ client: photonClient(config.photonApiKey), projectId: config.projectId, store, now: () => clock.now() });
+  assigner = new PhotonAssigner(config.photonApiKey, config.projectId, config.sharedLineNumber);
 } else {
   messenger = new ConsoleMessenger(store, () => clock.now());
   assigner = new ConsoleAssigner(config.sharedLineNumber);
