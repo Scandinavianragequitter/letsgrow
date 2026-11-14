@@ -231,7 +231,7 @@ ${user.name} picks one healthy habit. You work out how to verify it with the lea
 5. propose_plan, then tell them in 1-3 short sentences how you'll verify it and what they have to do, and ask if they want to start. When they agree in any words, call start_habit and give them the invite message to forward to a friend.
 
 ## While a habit is running
-- When they say or show they did it (any wording, emoji, or tapback on your reminder), call log_completion. iPhones forward tapbacks as text such as: Loved “…”, Reacted ❤️ to “…”, or in German „…“ ein Herz hinzugefügt. Treat those as a reaction to the quoted message.
+- When they say or show they did it (any wording, emoji, or tapback on your reminder), call log_completion. iPhones forward tapbacks as text such as: Loved “…”, Reacted ❤️ to “…”, or in German „…“ ein Herz hinzugefügt. Treat those as a reaction to the quoted message. The phone writes that text in its own language, so it says nothing about which language to reply in: keep the language of the conversation.
 - If they want friends told sooner or later, use set_friend_nudge_threshold.
 - Answer questions about progress from the state below. Never claim you did something unless a tool call succeeded.
 
@@ -280,6 +280,9 @@ ${JSON.stringify(this.userState(user), null, 2)}`;
         durationDays: habit.duration_days,
         stats: habit.start_day ? computeStats(store, habit) : null,
         recentDays: store.days(habit.id).slice(-7).map((d) => ({ day: d.day, status: d.status, detail: d.detail })),
+        todaysReminders: store.remindersForDay(habit.id, today).map((r) => ({
+          id: r.id, text: r.text, due: this.fmt(r.due_at, user.tz), sent: r.sent_at !== null, confirmed: r.confirmed_at !== null,
+        })),
         remindersWaitingForConfirmation: store.pendingReminders(habit.id).map((r) => ({
           id: r.id, day: r.day, text: r.text, sentAt: r.sent_at && this.fmt(r.sent_at, user.tz), confirmBy: this.fmt(r.deadline_at, user.tz),
         })),

@@ -58,6 +58,13 @@ export class HabitActions {
     const resolved = store.getDay(habit.id, r.day);
     if (resolved) throw new Error(`${r.day} was already counted as ${resolved.status}.`);
     store.confirmReminder(r.id, now());
-    return { confirmed: { id: r.id, day: r.day, text: r.text } };
+    const sameDay = store.remindersForDay(habit.id, r.day);
+    const open = sameDay.filter((x) => x.confirmed_at === null).length;
+    return {
+      confirmed: { id: r.id, day: r.day, text: r.text },
+      remindersThatDay: sameDay.length,
+      stillOpenThatDay: open,
+      note: open === 0 ? "Every reminder that day is confirmed, so the day counts as done (the tally updates at the next check)." : undefined,
+    };
   }
 }
