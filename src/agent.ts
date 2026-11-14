@@ -20,8 +20,11 @@
  * text therefore got into the registry by texting us first — see store.ts.
  */
 
+import { readFile } from "node:fs/promises";
+
 import { loadConfig } from "./config.ts";
 import { describe, formatMinutes, Heartbeat } from "./heartbeat.ts";
+import { History, Llm } from "./llm.ts";
 import { type InboundMessage, PhotonTransport, problemCode } from "./photon.ts";
 import { SpaceStore, type KnownSpace } from "./store.ts";
 
@@ -50,6 +53,28 @@ const transport = new PhotonTransport({
 });
 
 const heartbeat = new Heartbeat({ config, store, outbox: transport });
+
+/**
+ * The conversation half. Absent a key the agent degrades to commands and
+ * heartbeats rather than refusing to start — losing the chat is not a reason
+ * to lose the scheduler.
+ */
+const llm = config.openrouterKey
+  ? new Llm({
+      apiKey: config.openrouterKey,
+      models: config.models,
+      systemPrompt: (await readFile(config.promptFile, "utf8").catch((error: unknown) => {
+        console.warn(
+          `[llm] could not read ${config.promptFile} (${describe(error)}); using a minimal prompt`,
+        );
+        return "You are \"page\", reached over iMessage. Keep replies to one or two sentences of plain text.";
+      })).trim(),
+      timeoutMs: config.llmTimeoutMs,
+      maxTokens: config.llmMaxTokens,
+    })
+  : undefined;
+
+const history = new History();
 
 type Command =
   | { kind: "ping" }
@@ -170,6 +195,55 @@ async function handleCommand(
   }
 }
 
+/**
+ * Hold a typing indicator while the model thinks. Best-effort on purpose: a
+ * failed indicator must never cost us the reply it was decorating.
+ */
+async function withTyping<T>(
+  spaceId: string,
+  senderId: string,
+  work: () => Promise<T>,
+): Promise<T> {
+  const set = async (typing: boolean) => {
+    try {
+      await transport.setTyping({ spaceId, senderId, typing });
+    } catch (error) {
+      console.warn(`[agent] typing indicator failed: ${describe(error)}`);
+    }
+  };
+  await set(true);
+  try {
+    return await work();
+  } finally {
+    await set(false);
+  }
+}
+
+async function converse(
+  message: InboundMessage,
+  known: KnownSpace,
+  model: Llm,
+): Promise<void> {
+  const senderId = message.agentUserId ?? known.agentUserId;
+  if (!senderId) {
+    console.warn(`[agent] cannot answer ${message.spaceId}: no agent sender id`);
+    return;
+  }
+  const turns = history.append(message.spaceId, { role: "user", content: message.text ?? "" });
+  try {
+    const answer = await withTyping(message.spaceId, senderId, () => model.reply(turns));
+    history.append(message.spaceId, { role: "assistant", content: answer.text });
+    console.log(`[agent] ${answer.model} answered in ${answer.ms}ms`);
+    await reply(message, answer.text);
+  } catch (error) {
+    // Drop the user turn again: a question the model never answered should not
+    // sit in the transcript pretending it was part of the conversation.
+    history.clear(message.spaceId);
+    console.error(`[agent] model failed: ${describe(error)}`);
+    await reply(message, "my brain is offline for a moment — try again in a bit?");
+  }
+}
+
 /** Guards against the poll returning a message we already acted on. */
 const handled = new Set<string>();
 
@@ -217,9 +291,12 @@ async function handleInbound(message: InboundMessage): Promise<void> {
   const command = parseCommand(message.text);
   try {
     if (command) {
+      // Commands are handled before the model ever sees them, so a wedged or
+      // rate-limited model can never cost you control of the heartbeat.
       await handleCommand(message, known, command);
+    } else if (llm) {
+      await converse(message, known, llm);
     } else {
-      // TODO(carl): this is where the agent's real behaviour goes.
       await reply(message, HELP);
     }
   } catch (error) {
@@ -280,6 +357,19 @@ console.log(
     : "[agent] serving every line this project holds (set AGENT_LINE to narrow it)",
 );
 console.log(`[agent] registry ${store.path} (${store.all().length} known chat(s))`);
+if (llm) {
+  console.log(`[agent] models ${config.models.join(" -> ")}`);
+  const paid = Llm.paidLooking(config.models);
+  if (paid.length > 0) {
+    // OpenRouter bills whichever model answers, so a paid entry behind a free
+    // one is charged the moment the free one is rate-limited.
+    console.warn(
+      `[agent] WARNING: these models are not ':free' and will be billed if they answer: ${paid.join(", ")}`,
+    );
+  }
+} else {
+  console.log("[agent] no OPENROUTER_API_KEY — commands and heartbeats only, no conversation");
+}
 heartbeat.start();
 
 // Prove the credentials work before settling into the poll loop, so a bad key

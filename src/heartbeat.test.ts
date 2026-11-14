@@ -30,6 +30,11 @@ const BASE_CONFIG: Config = {
   requestTimeoutMs: 30_000,
   stateFile: "unused",
   agentLine: undefined,
+  openrouterKey: undefined,
+  models: ["test/model:free"],
+  promptFile: "prompt.md",
+  llmTimeoutMs: 20_000,
+  llmMaxTokens: 400,
   maxConsecutiveFailures: 3,
 };
 

@@ -48,6 +48,11 @@ export interface Inbox {
   poll(sinceISO: string): Promise<InboundMessage[]>;
 }
 
+export interface Typing {
+  /** Best-effort typing indicator; failures are the caller's to ignore. */
+  setTyping(input: { spaceId: string; senderId: string; typing: boolean }): Promise<void>;
+}
+
 export interface Outbox {
   /**
    * `idempotencyKey` must be stable for a given logical send: Photon rejects a
@@ -107,7 +112,7 @@ function normalize(raw: unknown): InboundMessage | undefined {
   };
 }
 
-export class PhotonTransport implements Inbox, Outbox {
+export class PhotonTransport implements Inbox, Outbox, Typing {
   #photon: Photon;
   #projectId: string;
 
@@ -150,6 +155,17 @@ export class PhotonTransport implements Inbox, Outbox {
       pageToken = page.nextPageToken ?? undefined;
     } while (pageToken);
     return messages;
+  }
+
+  async setTyping(input: {
+    spaceId: string;
+    senderId: string;
+    typing: boolean;
+  }): Promise<void> {
+    await this.#photon.projects.setSpaceTyping({
+      path: { id: this.#projectId, spaceId: input.spaceId },
+      body: { senderId: input.senderId, typing: input.typing },
+    });
   }
 
   async sendText(input: {

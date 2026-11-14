@@ -35,6 +35,17 @@ export interface Config {
    */
   readonly agentLine: string | undefined;
   /**
+   * OpenRouter key. Absent is a supported mode: the agent still answers
+   * commands and still sends heartbeats, it just cannot hold a conversation.
+   */
+  readonly openrouterKey: string | undefined;
+  /** Models in priority order. Every entry should end in `:free`. */
+  readonly models: readonly string[];
+  /** File holding the system prompt, so wording needs no code change. */
+  readonly promptFile: string;
+  readonly llmTimeoutMs: number;
+  readonly llmMaxTokens: number;
+  /**
    * Consecutive send failures after which a chat is parked rather than
    * retried every tick. The shared-line permission ("has messaged the line
    * since the assignment") is the expected reason a previously fine chat
@@ -82,6 +93,14 @@ export function loadConfig(): Config {
     requestTimeoutMs: numberEnv("REQUEST_TIMEOUT_MS", 30_000, 1000),
     stateFile: process.env.STATE_FILE?.trim() || "state.json",
     agentLine: process.env.AGENT_LINE?.trim() || undefined,
+    openrouterKey: process.env.OPENROUTER_API_KEY?.trim() || undefined,
+    models: [
+      process.env.OPENROUTER_MODEL?.trim() || "nvidia/nemotron-3.5-lightning:free",
+      process.env.OPENROUTER_FALLBACK_MODEL?.trim() || "google/gemma-4-31b-it:free",
+    ],
+    promptFile: process.env.SYSTEM_PROMPT_FILE?.trim() || "prompt.md",
+    llmTimeoutMs: numberEnv("LLM_TIMEOUT_MS", 20_000, 1000),
+    llmMaxTokens: numberEnv("LLM_MAX_TOKENS", 400, 16),
     maxConsecutiveFailures: numberEnv("HEARTBEAT_MAX_FAILURES", 3, 1),
   };
 }
