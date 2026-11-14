@@ -10,7 +10,7 @@
     "test": "tsx --test src/*.test.ts"
   },
   "dependencies": {
-    "spectrum-ts": "^12.16.0"
+    "@photon-ai/api": "^0.6.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

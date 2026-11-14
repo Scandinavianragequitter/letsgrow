@@ -18,8 +18,15 @@ import { dirname, resolve } from "node:path";
 export interface KnownSpace {
   /** Platform space id, as it arrived on the inbound message. */
   id: string;
-  /** The Photon line this chat sits on, needed to rehydrate the space later. */
+  /** The Photon line this chat sits on, for diagnostics. */
   phone?: string;
+  /**
+   * The agent user that receives in this chat, taken from an inbound message's
+   * `receivedBy.id`. Photon requires it as `senderId` on every send, and the
+   * docs forbid deriving it from the line's phone number — so a chat we have
+   * never received from cannot be texted, and this is why.
+   */
+  agentUserId?: string;
   type?: "dm" | "group";
   /** Counterpart handle, kept for diagnostics only. */
   address?: string;
@@ -41,6 +48,12 @@ export interface KnownSpace {
 interface StateFile {
   version: 1;
   spaces: Record<string, KnownSpace>;
+  /**
+   * How far the inbound poll has read, as an ISO timestamp. Persisted so a
+   * restart neither re-processes old messages nor skips ones that arrived
+   * while the agent was down.
+   */
+  cursor?: string;
 }
 
 const EMPTY: StateFile = { version: 1, spaces: {} };
@@ -69,7 +82,11 @@ export class SpaceStore {
         "spaces" in parsed &&
         typeof (parsed as StateFile).spaces === "object"
       ) {
-        this.#state = { version: 1, spaces: (parsed as StateFile).spaces ?? {} };
+        this.#state = {
+          version: 1,
+          spaces: (parsed as StateFile).spaces ?? {},
+          cursor: (parsed as StateFile).cursor,
+        };
         return;
       }
       throw new Error("unrecognized shape");
@@ -104,6 +121,7 @@ export class SpaceStore {
     phone?: string;
     type?: "dm" | "group";
     address?: string;
+    agentUserId?: string;
     at: Date;
   }): KnownSpace {
     const now = input.at.toISOString();
@@ -114,6 +132,7 @@ export class SpaceStore {
           phone: input.phone ?? existing.phone,
           type: input.type ?? existing.type,
           address: input.address ?? existing.address,
+          agentUserId: input.agentUserId ?? existing.agentUserId,
           lastInboundAt: now,
           consecutiveFailures: 0,
           parked: false,
@@ -123,6 +142,7 @@ export class SpaceStore {
           phone: input.phone,
           type: input.type,
           address: input.address,
+          agentUserId: input.agentUserId,
           firstSeenAt: now,
           lastInboundAt: now,
           heartbeatCount: 0,
@@ -140,6 +160,18 @@ export class SpaceStore {
     this.#state.spaces[id] = next;
     this.#save();
     return next;
+  }
+
+  cursor(): string | undefined {
+    return this.#state.cursor;
+  }
+
+  /** Advance the inbound poll cursor. Never moves backwards. */
+  setCursor(iso: string): void {
+    const current = this.#state.cursor;
+    if (current && Date.parse(current) >= Date.parse(iso)) return;
+    this.#state.cursor = iso;
+    this.#save();
   }
 
   /** Flush pending writes — called on shutdown. */

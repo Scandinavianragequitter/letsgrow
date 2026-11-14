@@ -17,6 +17,14 @@ export interface Config {
   readonly heartbeatEnabled: boolean;
   /** How often the scheduler wakes to look for due heartbeats. */
   readonly tickSeconds: number;
+  /** How often the inbound poll runs. */
+  readonly pollSeconds: number;
+  /**
+   * Per-request timeout. The default is generous because the messages
+   * endpoint has been measured taking well over ten seconds, and a timeout
+   * mid-send is the one failure that costs a round trip to diagnose.
+   */
+  readonly requestTimeoutMs: number;
   /** Where the known-space registry is persisted. */
   readonly stateFile: string;
   /**
@@ -63,6 +71,8 @@ export function loadConfig(): Config {
     heartbeatMinutes: numberEnv("HEARTBEAT_MINUTES", 60, 1),
     heartbeatEnabled: boolEnv("HEARTBEAT_ENABLED", true),
     tickSeconds: numberEnv("HEARTBEAT_TICK_SECONDS", 20, 1),
+    pollSeconds: numberEnv("POLL_SECONDS", 3, 1),
+    requestTimeoutMs: numberEnv("REQUEST_TIMEOUT_MS", 30_000, 1000),
     stateFile: process.env.STATE_FILE?.trim() || "state.json",
     maxConsecutiveFailures: numberEnv("HEARTBEAT_MAX_FAILURES", 3, 1),
   };

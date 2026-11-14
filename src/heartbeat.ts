@@ -1,11 +1,7 @@
 /**
  * The proactive side of the agent: a timer that texts chats on its own.
  *
- * Photon has no scheduler, so the clock lives here. Note the name collision:
- * the iMessage provider also has a `onHeartbeat` hook, but that is a liveness
- * signal from the live message subscription (see `IMessageHeartbeat`) and has
- * nothing to do with these outbound texts. Stream liveness is tracked
- * separately in agent.ts.
+ * Photon has no scheduler, so the clock lives here.
  *
  * Scheduling is per chat, not global: each chat's next heartbeat is one
  * interval after its own last heartbeat (or after its first inbound message,
@@ -13,22 +9,20 @@
  * `HEARTBEAT_TICK_SECONDS` and sends whatever is due, one chat at a time.
  */
 
-import type { Space } from "spectrum-ts";
-import { text } from "spectrum-ts";
-
 import type { Config } from "./config.ts";
+import { isPermissionFailure, problemCode, type Outbox } from "./photon.ts";
 import type { KnownSpace, SpaceStore } from "./store.ts";
 
 export type SendOutcome =
   | { ok: true; skipped?: undefined }
-  | { ok: false; skipped: "paused" | "parked" | "unresolved"; error?: undefined }
+  | { ok: false; skipped: "paused" | "parked" | "no-sender"; error?: undefined }
   | { ok: false; skipped?: undefined; error: Error };
 
 export interface HeartbeatDeps {
   config: Config;
   store: SpaceStore;
-  /** Turns a stored chat back into a live `Space` we can send into. */
-  resolveSpace: (known: KnownSpace) => Promise<Space | undefined>;
+  /** Where outbound texts go. An interface so tests need no network. */
+  outbox: Outbox;
   /** Clock seam, so the scheduler is testable without waiting an hour. */
   now?: () => Date;
 }
@@ -115,55 +109,58 @@ export class Heartbeat {
   async send(spaceId: string, reason: "scheduled" | "manual"): Promise<SendOutcome> {
     const { store, config } = this.#deps;
     const known = store.get(spaceId);
-    if (!known) return { ok: false, skipped: "unresolved" };
+    if (!known) return { ok: false, skipped: "no-sender" };
     if (reason === "scheduled" && known.paused) return { ok: false, skipped: "paused" };
     if (reason === "scheduled" && known.parked) return { ok: false, skipped: "parked" };
 
-    const space = await this.#deps.resolveSpace(known).catch((error: unknown) => {
-      console.warn(`[heartbeat] could not resolve ${spaceId}: ${describe(error)}`);
-      return undefined;
-    });
-    if (!space) {
-      store.update(spaceId, {
-        consecutiveFailures: known.consecutiveFailures + 1,
-        lastErrorAt: this.#now.toISOString(),
-        lastError: "space could not be resolved",
-      });
-      return { ok: false, skipped: "unresolved" };
+    // Without the agent user id from an inbound message there is no legitimate
+    // `senderId` to send as, and inventing one is explicitly wrong. Wait for
+    // the chat to say something rather than guessing.
+    if (!known.agentUserId) {
+      console.warn(`[heartbeat] ${spaceId} has no agent sender id yet — skipping`);
+      return { ok: false, skipped: "no-sender" };
     }
 
     const sentAt = this.#now;
+    const sequence = known.heartbeatCount + 1;
     const body = renderHeartbeat(known, sentAt, this.intervalMinutes(known));
     try {
-      await space.send(text(body));
+      await this.#deps.outbox.sendText({
+        spaceId,
+        senderId: known.agentUserId,
+        text: body,
+        // Stable per heartbeat, so a retry after a lost response cannot text
+        // twice — Photon rejects a reused key.
+        idempotencyKey: `heartbeat:${spaceId}:${sequence}`,
+      });
       store.update(spaceId, {
         lastHeartbeatAt: sentAt.toISOString(),
-        heartbeatCount: known.heartbeatCount + 1,
+        heartbeatCount: sequence,
         consecutiveFailures: 0,
         parked: false,
       });
-      console.log(
-        `[heartbeat] ${reason} -> ${spaceId} (#${known.heartbeatCount + 1})`,
-      );
+      console.log(`[heartbeat] ${reason} -> ${spaceId} (#${sequence})`);
       return { ok: true };
     } catch (error) {
+      const code = problemCode(error);
+      // A permission failure is definitive, not flaky: the chat cannot be
+      // texted until the person messages the line again. Park it at once
+      // instead of spending two more attempts proving the same thing.
+      const definitive = isPermissionFailure(error);
       const failures = known.consecutiveFailures + 1;
-      const parked = failures >= config.maxConsecutiveFailures;
+      const parked = definitive || failures >= config.maxConsecutiveFailures;
       store.update(spaceId, {
         consecutiveFailures: failures,
         lastErrorAt: sentAt.toISOString(),
-        lastError: describe(error),
+        lastError: code ? `${code}: ${describe(error)}` : describe(error),
         parked,
       });
-      // Logged in full, on purpose: a send that starts failing on a chat that
-      // used to work is the signal that the shared-line permission lapsed, and
-      // the exact error text is the evidence for that.
       console.error(
-        `[heartbeat] send to ${spaceId} failed (${failures}/${config.maxConsecutiveFailures}${
-          parked ? ", parked until they text us again" : ""
-        }): ${describe(error)}`,
+        `[heartbeat] send to ${spaceId} failed${code ? ` [${code}]` : ""} ` +
+          `(${failures}/${config.maxConsecutiveFailures}` +
+          `${parked ? (definitive ? ", parked — needs a fresh inbound message" : ", parked") : ""}): ` +
+          describe(error),
       );
-      if (error instanceof Error && error.stack) console.error(error.stack);
       return { ok: false, error: error instanceof Error ? error : new Error(describe(error)) };
     }
   }

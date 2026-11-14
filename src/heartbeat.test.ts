@@ -3,8 +3,8 @@
  * expensive to observe in production — a heartbeat is an hour apart, so waiting
  * for one to verify the arithmetic is not a workable loop.
  *
- * The real Photon connection is not involved: `resolveSpace` hands back a fake
- * space and the clock is injected, so `npm test` needs no credentials.
+ * The real Photon connection is not involved: the outbox is a fake and the
+ * clock is injected, so `npm test` needs no credentials.
  */
 
 import assert from "node:assert/strict";
@@ -13,10 +13,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import type { Space } from "spectrum-ts";
+import { ApiError } from "@photon-ai/api";
 
 import type { Config } from "./config.ts";
 import { formatMinutes, Heartbeat } from "./heartbeat.ts";
+import type { Outbox } from "./photon.ts";
 import { SpaceStore } from "./store.ts";
 
 const BASE_CONFIG: Config = {
@@ -25,6 +26,8 @@ const BASE_CONFIG: Config = {
   heartbeatMinutes: 60,
   heartbeatEnabled: true,
   tickSeconds: 20,
+  pollSeconds: 3,
+  requestTimeoutMs: 30_000,
   stateFile: "unused",
   maxConsecutiveFailures: 3,
 };
@@ -33,9 +36,20 @@ interface Harness {
   store: SpaceStore;
   heartbeat: Heartbeat;
   sent: string[];
+  keys: string[];
   now: Date;
-  fail: boolean;
+  /** undefined sends fine; otherwise the error the fake outbox throws. */
+  fail: Error | undefined;
   advance(minutes: number): void;
+}
+
+/**
+ * The real error class the SDK throws, carrying an RFC-9457 problem document.
+ * Built here rather than faked, so the test exercises the same detection path
+ * production does.
+ */
+function apiError(status: number, code: string): Error {
+  return new ApiError(code, { status, headers: new Headers(), body: { code } });
 }
 
 async function harness(overrides: Partial<Config> = {}): Promise<Harness> {
@@ -46,22 +60,25 @@ async function harness(overrides: Partial<Config> = {}): Promise<Harness> {
   const state = {
     now: new Date("2026-11-14T12:00:00.000Z"),
     sent: [] as string[],
-    fail: false,
+    keys: [] as string[],
+    fail: undefined as Error | undefined,
   };
 
-  const space = {
-    id: "space-1",
-    send: async (content: unknown) => {
-      if (state.fail) throw new Error("Target not allowed for this project");
-      state.sent.push(JSON.stringify(content));
-      return undefined;
+  const outbox: Outbox = {
+    sendText: async (input) => {
+      if (state.fail) throw state.fail;
+      if (state.keys.includes(input.idempotencyKey)) {
+        throw new Error(`idempotency key reused: ${input.idempotencyKey}`);
+      }
+      state.keys.push(input.idempotencyKey);
+      state.sent.push(input.text);
     },
-  } as unknown as Space;
+  };
 
   const heartbeat = new Heartbeat({
     config: { ...BASE_CONFIG, ...overrides },
     store,
-    resolveSpace: async () => space,
+    outbox,
     now: () => state.now,
   });
 
@@ -71,13 +88,16 @@ async function harness(overrides: Partial<Config> = {}): Promise<Harness> {
     get sent() {
       return state.sent;
     },
+    get keys() {
+      return state.keys;
+    },
     get now() {
       return state.now;
     },
     get fail() {
       return state.fail;
     },
-    set fail(value: boolean) {
+    set fail(value: Error | undefined) {
       state.fail = value;
     },
     advance(minutes: number) {
@@ -87,7 +107,13 @@ async function harness(overrides: Partial<Config> = {}): Promise<Harness> {
 }
 
 function register(h: Harness) {
-  return h.store.recordInbound({ id: "space-1", phone: "+16289988199", type: "dm", at: h.now });
+  return h.store.recordInbound({
+    id: "space-1",
+    phone: "+16289988199",
+    type: "dm",
+    agentUserId: "pho_usr_agent",
+    at: h.now,
+  });
 }
 
 test("a chat that just texted is not heartbeated immediately", async () => {
@@ -159,7 +185,7 @@ test("ping sends regardless of the schedule and still advances it", async () => 
 test("repeated send failures park the chat instead of retrying forever", async () => {
   const h = await harness();
   register(h);
-  h.fail = true;
+  h.fail = new Error("socket hang up");
   for (let i = 0; i < 4; i += 1) {
     h.advance(60);
     await h.heartbeat.tick();
@@ -167,26 +193,65 @@ test("repeated send failures park the chat instead of retrying forever", async (
   const parked = h.store.get("space-1");
   assert.equal(parked?.parked, true, "should park at maxConsecutiveFailures");
   assert.equal(parked?.consecutiveFailures, 3, "and stop counting once parked");
-  assert.match(parked?.lastError ?? "", /Target not allowed/);
+  assert.match(parked?.lastError ?? "", /socket hang up/);
 });
 
 test("a new inbound message un-parks a chat and clears its failures", async () => {
   const h = await harness();
   register(h);
-  h.fail = true;
+  h.fail = new Error("socket hang up");
   for (let i = 0; i < 4; i += 1) {
     h.advance(60);
     await h.heartbeat.tick();
   }
   assert.equal(h.store.get("space-1")?.parked, true);
 
-  h.fail = false;
+  h.fail = undefined;
   const revived = h.store.recordInbound({ id: "space-1", at: h.now });
   assert.equal(revived.parked, false);
   assert.equal(revived.consecutiveFailures, 0);
   h.advance(60);
   await h.heartbeat.tick();
   assert.equal(h.sent.length, 1, "a revived chat is heartbeated again");
+});
+
+test("a chat with no agent sender id is never texted", async () => {
+  const h = await harness();
+  // A chat recorded without an inbound agent id — Photon would reject the send,
+  // and deriving a sender from the line's phone number is explicitly wrong.
+  h.store.recordInbound({ id: "space-1", phone: "+16289988199", at: h.now });
+  h.advance(120);
+  await h.heartbeat.tick();
+  assert.equal(h.sent.length, 0);
+  const outcome = await h.heartbeat.send("space-1", "manual");
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.skipped, "no-sender");
+});
+
+test("a shared-line permission failure parks the chat immediately", async () => {
+  const h = await harness();
+  register(h);
+  h.fail = apiError(403, "SHARED_LINE_INBOUND_REQUIRED");
+  h.advance(60);
+  await h.heartbeat.tick();
+  const known = h.store.get("space-1");
+  // Retrying is pointless: nothing changes until the person texts the line.
+  assert.equal(known?.parked, true, "should park on the first permission failure");
+  assert.equal(known?.consecutiveFailures, 1, "without burning the retry budget");
+});
+
+test("each heartbeat uses a fresh idempotency key", async () => {
+  const h = await harness();
+  register(h);
+  for (let i = 0; i < 3; i += 1) {
+    h.advance(60);
+    await h.heartbeat.tick();
+  }
+  assert.deepEqual(h.keys, [
+    "heartbeat:space-1:1",
+    "heartbeat:space-1:2",
+    "heartbeat:space-1:3",
+  ]);
 });
 
 test("the registry survives a restart", async () => {
@@ -201,6 +266,7 @@ test("the registry survives a restart", async () => {
   assert.equal(restored?.intervalMinutes, 15);
   assert.equal(restored?.heartbeatCount, 7);
   assert.equal(restored?.phone, "+16289988199");
+  assert.equal(restored?.agentUserId, "pho_usr_agent", "the sender id must survive too");
 });
 
 test("intervals render readably", () => {
