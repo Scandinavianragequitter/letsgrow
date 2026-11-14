@@ -1,15 +1,24 @@
 {
-  "name": "page",
-  "version": "0.1.0",
+  "name": "lets-grow",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Spectrum iMessage agent: replies to texts and sends a periodic heartbeat to people who have texted it",
+  "description": "Let'sGrow: an agent that verifies your habit and has a friend's agent nudge you over iMessage",
+  "engines": { "node": ">=22.13" },
   "scripts": {
-    "start": "tsx --env-file=.env src/agent.ts",
-    "typecheck": "tsc --noEmit"
+    "start": "tsx --env-file=.env src/main.ts",
+    "dev": "tsx watch --env-file=.env src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts",
+    "simulate": "tsx scripts/simulate.ts"
   },
   "dependencies": {
-    "spectrum-ts": "^12.16.0"
+    "@anthropic-ai/sdk": "^1.8.0",
+    "@hono/node-server": "^1.13.0",
+    "@photon-ai/api": "latest",
+    "hono": "^4.13.0",
+    "spectrum-ts": "^12.16.0",
+    "zod": "^4.6.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
