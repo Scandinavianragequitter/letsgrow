@@ -15,7 +15,7 @@ import type { KnownSpace, SpaceStore } from "./store.ts";
 
 export type SendOutcome =
   | { ok: true; skipped?: undefined }
-  | { ok: false; skipped: "paused" | "parked" | "no-sender"; error?: undefined }
+  | { ok: false; skipped: "paused" | "parked" | "no-sender" | "other-line"; error?: undefined }
   | { ok: false; skipped?: undefined; error: Error };
 
 export interface HeartbeatDeps {
@@ -80,8 +80,19 @@ export class Heartbeat {
     return new Date(Date.parse(anchor) + this.intervalMinutes(known) * 60_000);
   }
 
+  /**
+   * Whether this chat is one we serve at all. With AGENT_LINE set, a chat on
+   * another line — or one whose line was never recorded — is left alone.
+   */
+  serves(known: KnownSpace): boolean {
+    const line = this.#deps.config.agentLine;
+    if (!line) return true;
+    return known.phone === line;
+  }
+
   isDue(known: KnownSpace, now = this.#now): boolean {
     if (known.paused || known.parked) return false;
+    if (!this.serves(known)) return false;
     return this.dueAt(known).getTime() <= now.getTime();
   }
 
@@ -112,6 +123,9 @@ export class Heartbeat {
     if (!known) return { ok: false, skipped: "no-sender" };
     if (reason === "scheduled" && known.paused) return { ok: false, skipped: "paused" };
     if (reason === "scheduled" && known.parked) return { ok: false, skipped: "parked" };
+    // A manual `ping` cannot reach around the line filter either: the chat is
+    // not ours to text.
+    if (!this.serves(known)) return { ok: false, skipped: "other-line" };
 
     // Without the agent user id from an inbound message there is no legitimate
     // `senderId` to send as, and inventing one is explicitly wrong. Wait for

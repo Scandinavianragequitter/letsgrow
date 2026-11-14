@@ -28,6 +28,13 @@ export interface Config {
   /** Where the known-space registry is persisted. */
   readonly stateFile: string;
   /**
+   * Serve only the chats on this line, e.g. "+16289988199". Unset serves every
+   * line the project holds. The filter is deliberately fail-closed: a chat
+   * whose line we have not recorded is skipped rather than assumed to match,
+   * because the cost of guessing wrong is texting a stranger's thread.
+   */
+  readonly agentLine: string | undefined;
+  /**
    * Consecutive send failures after which a chat is parked rather than
    * retried every tick. The shared-line permission ("has messaged the line
    * since the assignment") is the expected reason a previously fine chat
@@ -74,6 +81,7 @@ export function loadConfig(): Config {
     pollSeconds: numberEnv("POLL_SECONDS", 3, 1),
     requestTimeoutMs: numberEnv("REQUEST_TIMEOUT_MS", 30_000, 1000),
     stateFile: process.env.STATE_FILE?.trim() || "state.json",
+    agentLine: process.env.AGENT_LINE?.trim() || undefined,
     maxConsecutiveFailures: numberEnv("HEARTBEAT_MAX_FAILURES", 3, 1),
   };
 }

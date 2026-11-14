@@ -186,8 +186,20 @@ function remember(id: string): boolean {
 async function handleInbound(message: InboundMessage): Promise<void> {
   if (!remember(message.id)) return;
 
+  // With AGENT_LINE set, chats on the project's other lines are not ours to
+  // answer. Dropped before the registry so they never become heartbeat
+  // recipients either.
+  if (config.agentLine && message.agentHandle !== config.agentLine) {
+    console.log(
+      `[agent] ignoring ${message.spaceId} on line ${message.agentHandle ?? "unknown"} ` +
+        `(serving ${config.agentLine} only)`,
+    );
+    return;
+  }
+
   const known = store.recordInbound({
     id: message.spaceId,
+    phone: message.agentHandle,
     type: message.spaceKind === "direct" ? "dm" : "group",
     address: message.senderHandle,
     agentUserId: message.agentUserId,
@@ -262,6 +274,11 @@ process.on("SIGINT", () => void shutdown("SIGINT"));
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
 console.log(`[agent] project ${config.projectId}`);
+console.log(
+  config.agentLine
+    ? `[agent] serving line ${config.agentLine} only`
+    : "[agent] serving every line this project holds (set AGENT_LINE to narrow it)",
+);
 console.log(`[agent] registry ${store.path} (${store.all().length} known chat(s))`);
 heartbeat.start();
 

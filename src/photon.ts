@@ -29,6 +29,13 @@ export interface InboundMessage {
    * phone number, which is why the registry persists it.
    */
   agentUserId: string | undefined;
+  /**
+   * The receiving line's own handle, e.g. "+16289988199". A project can hold
+   * several shared lines at once, and the same person texting from a different
+   * handle lands on a different line as a different chat — so this is what the
+   * AGENT_LINE filter matches on.
+   */
+  agentHandle: string | undefined;
   senderUserId: string | undefined;
   senderHandle: string | undefined;
   contentType: string | undefined;
@@ -88,6 +95,7 @@ function normalize(raw: unknown): InboundMessage | undefined {
     spaceId,
     spaceKind: str(space, "kind"),
     agentUserId: str(receivedBy, "id"),
+    agentHandle: str(receivedBy, "handle") ?? str(receivedBy, "address"),
     senderUserId: str(sentBy, "id"),
     senderHandle: str(sentBy, "handle") ?? str(sentBy, "address"),
     contentType,

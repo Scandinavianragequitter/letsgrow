@@ -18,7 +18,10 @@ import { dirname, resolve } from "node:path";
 export interface KnownSpace {
   /** Platform space id, as it arrived on the inbound message. */
   id: string;
-  /** The Photon line this chat sits on, for diagnostics. */
+  /**
+   * The Photon line this chat sits on. Load-bearing, not diagnostic: the
+   * AGENT_LINE filter matches against it.
+   */
   phone?: string;
   /**
    * The agent user that receives in this chat, taken from an inbound message's

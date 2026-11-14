@@ -29,6 +29,7 @@ const BASE_CONFIG: Config = {
   pollSeconds: 3,
   requestTimeoutMs: 30_000,
   stateFile: "unused",
+  agentLine: undefined,
   maxConsecutiveFailures: 3,
 };
 
@@ -252,6 +253,39 @@ test("each heartbeat uses a fresh idempotency key", async () => {
     "heartbeat:space-1:2",
     "heartbeat:space-1:3",
   ]);
+});
+
+test("with AGENT_LINE set, a chat on another line is never texted", async () => {
+  const h = await harness({ agentLine: "+16289988199" });
+  h.store.recordInbound({
+    id: "space-1",
+    phone: "+16285023837", // the project's other shared line
+    agentUserId: "pho_usr_other",
+    at: h.now,
+  });
+  h.advance(120);
+  await h.heartbeat.tick();
+  assert.equal(h.sent.length, 0);
+  const outcome = await h.heartbeat.send("space-1", "manual");
+  assert.equal(outcome.skipped, "other-line", "even a manual ping is refused");
+});
+
+test("with AGENT_LINE set, a chat with no recorded line is skipped", async () => {
+  const h = await harness({ agentLine: "+16289988199" });
+  // Fail closed: an entry written before the line was tracked must not be
+  // assumed to be on the served line.
+  h.store.recordInbound({ id: "space-1", agentUserId: "pho_usr_agent", at: h.now });
+  h.advance(120);
+  await h.heartbeat.tick();
+  assert.equal(h.sent.length, 0);
+});
+
+test("the matching line is still served normally", async () => {
+  const h = await harness({ agentLine: "+16289988199" });
+  register(h);
+  h.advance(60);
+  await h.heartbeat.tick();
+  assert.equal(h.sent.length, 1);
 });
 
 test("the registry survives a restart", async () => {
