@@ -1,0 +1,19 @@
+{
+  "name": "page",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Spectrum iMessage agent: replies to texts and sends a periodic heartbeat to people who have texted it",
+  "scripts": {
+    "start": "tsx --env-file=.env src/agent.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "spectrum-ts": "^12.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
