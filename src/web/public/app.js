@@ -138,6 +138,7 @@ function friendsCard() {
 }
 
 function connectBanner() {
+  if (S.warning) return h("div", { class: "banner warn" }, S.warning);
   if (S.user.connected) return null;
   return h("div", { class: "banner warn" }, h("b", {}, "One step: "), `text “hi” to ${S.line.number} from iMessage so I can reach you. `,
     h("a", { href: S.line.sms }, "Open Messages"), S.messengerMode === "console" ? " (demo mode: use the dev panel's “Connect me” instead)" : "");
@@ -194,7 +195,9 @@ function render(force) {
     if (hab.status === "active" || hab.status === "completed") right.push(friendsCard());
     right.push(h("button", { class: "ghost", onclick: () => confirm("Start over with a new habit?") && act(() => api("/api/habit/restart", "POST")) }, "Start over"));
   }
-  root.replaceChildren(connectBanner(), h("div", { class: "grid" }, chatCard(), h("div", {}, right)), S.dev ? devPanel() : null);
+  const who = h("div", { class: "mute", style: "text-align:right;font-size:13px" }, `Signed in as ${S.user.name} (${S.user.phone}) · `,
+    h("a", { href: "#", onclick: async (e) => { e.preventDefault(); await api("/api/logout", "POST"); location.reload(); } }, "Sign out"));
+  root.replaceChildren(who, connectBanner(), h("div", { class: "grid" }, chatCard(), h("div", {}, right)), S.dev ? devPanel() : null);
   const m = document.getElementById("msg");
   if (m && saved) { m.value = saved; if (focused) m.focus(); }
 }

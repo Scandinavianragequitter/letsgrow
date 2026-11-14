@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { getCookie, setCookie } from "hono/cookie";
+import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -35,6 +35,21 @@ export function createApp(d: AppDeps) {
     const t = getCookie(c, "lg_session");
     return t ? store.userForSession(t) : undefined;
   };
+  // Make sure a signed-in person is on a Photon line. Covers accounts made before Photon was on,
+  // and assignments that were released in the dashboard. Retries at most once a minute.
+  const lineChecked = new Map<string, number>();
+  async function ensureLine(user: UserRow, force = false): Promise<string | undefined> {
+    if (d.messenger.mode !== "photon") return;
+    const last = lineChecked.get(user.phone) ?? 0;
+    if (!force && Date.now() - last < 60_000) return;
+    lineChecked.set(user.phone, Date.now());
+    try {
+      const r = await d.assigner.assign(user.phone, user.name);
+      if (store.getKv(`line:${user.phone}`) !== r.number) store.setKv(`line:${user.phone}`, r.number);
+    } catch (err) {
+      return `Could not assign you a line yet: ${(err as Error).message}`;
+    }
+  }
   const smsHref = (number: string, body: string) => `sms:${number}&body=${encodeURIComponent(body)}`;
 
   function view(user: UserRow) {
@@ -84,16 +99,21 @@ export function createApp(d: AppDeps) {
     if (!name || !phone) return c.json({ error: "Enter your name and a valid phone number (with country code if outside the US)." }, 400);
     const user = store.getUserByPhone(phone) ?? store.createUser(name, phone, config.defaultTz, clock.now());
     let warning: string | undefined;
-    // Photon may put each person on a different shared number, so remember the one they got.
-    try { store.setKv(`line:${phone}`, (await d.assigner.assign(phone, name)).number); }
-    catch (err) { warning = `Could not assign you a line yet: ${(err as Error).message}`; }
+    warning = await ensureLine(user, true);
     setCookie(c, "lg_session", store.createSession(user.id), { httpOnly: true, sameSite: "Lax", path: "/", maxAge: 60 * 60 * 24 * 90 });
     return c.json({ ...view(user), warning });
   });
 
-  app.get("/api/state", (c) => {
+  app.get("/api/state", async (c) => {
     const user = userOf(c);
-    return user ? c.json(view(user)) : c.json({ user: null }, 200);
+    if (!user) return c.json({ user: null }, 200);
+    const warning = await ensureLine(user);
+    return c.json({ ...view(user), warning });
+  });
+
+  app.post("/api/logout", (c) => {
+    deleteCookie(c, "lg_session", { path: "/" });
+    return c.json({ ok: true });
   });
 
   app.post("/api/chat", async (c) => {
