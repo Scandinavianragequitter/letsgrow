@@ -54,7 +54,7 @@ export function createApp(d: AppDeps) {
     }
     return {
       user: { name: user.name, phone: user.phone, connected: !!user.connected, tz: user.tz },
-      line: { number: config.sharedLineNumber, sms: smsHref(config.sharedLineNumber, "hi") },
+      line: (() => { const n = store.getKv(`line:${user.phone}`) ?? config.sharedLineNumber; return { number: n, sms: smsHref(n, "hi") }; })(),
       now: { ms: now, day: dayKey(now, user.tz) },
       habit: habit && {
         id: habit.id, status: habit.status, startDay: habit.start_day, durationDays: habit.duration_days,
@@ -84,7 +84,8 @@ export function createApp(d: AppDeps) {
     if (!name || !phone) return c.json({ error: "Enter your name and a valid phone number (with country code if outside the US)." }, 400);
     const user = store.getUserByPhone(phone) ?? store.createUser(name, phone, config.defaultTz, clock.now());
     let warning: string | undefined;
-    try { await d.assigner.assign(phone, name); }
+    // Photon may put each person on a different shared number, so remember the one they got.
+    try { store.setKv(`line:${phone}`, (await d.assigner.assign(phone, name)).number); }
     catch (err) { warning = `Could not assign you a line yet: ${(err as Error).message}`; }
     setCookie(c, "lg_session", store.createSession(user.id), { httpOnly: true, sameSite: "Lax", path: "/", maxAge: 60 * 60 * 24 * 90 });
     return c.json({ ...view(user), warning });
