@@ -5,8 +5,9 @@ import Anthropic from "@anthropic-ai/sdk";
 
 export interface ToolDef { name: string; description: string; schema: Record<string, unknown> }
 export interface ToolCall { id: string; name: string; input: unknown }
+export interface ImagePart { mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp"; data: string /* base64 */ }
 export type ChatMessage =
-  | { role: "user"; content: string }
+  | { role: "user"; content: string; images?: ImagePart[] }
   /** `raw`: the provider's own content blocks, replayed as-is (needed for server-side tools like web search). */
   | { role: "assistant"; content: string; toolCalls?: ToolCall[]; raw?: unknown }
   | { role: "tool"; toolCallId: string; name: string; content: string };
@@ -42,9 +43,13 @@ export class AnthropicLlm implements LlmClient {
     const out: Anthropic.MessageParam[] = [];
     for (const m of messages) {
       if (m.role === "user") {
+        const blocks: Anthropic.ContentBlockParam[] = [
+          ...(m.images ?? []).map((im) => ({ type: "image" as const, source: { type: "base64" as const, media_type: im.mediaType, data: im.data } })),
+          { type: "text", text: m.content },
+        ];
         const last = out[out.length - 1];
-        if (last?.role === "user" && Array.isArray(last.content)) (last.content as Anthropic.ContentBlockParam[]).push({ type: "text", text: m.content });
-        else out.push({ role: "user", content: m.content });
+        if (last?.role === "user" && Array.isArray(last.content)) (last.content as Anthropic.ContentBlockParam[]).push(...blocks);
+        else out.push({ role: "user", content: m.images?.length ? blocks : m.content });
       }
       else if (m.role === "assistant" && m.raw) out.push({ role: "assistant", content: m.raw as Anthropic.ContentBlockParam[] });
       else if (m.role === "assistant") {
@@ -117,7 +122,9 @@ export class OpenRouterLlm implements LlmClient {
                     ? { tool_calls: m.toolCalls.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: JSON.stringify(c.input ?? {}) } })) }
                     : {}),
                 }
-              : { role: "user", content: m.content }),
+              : m.images?.length
+                ? { role: "user", content: [{ type: "text", text: m.content }, ...m.images.map((im) => ({ type: "image_url", image_url: { url: `data:${im.mediaType};base64,${im.data}` } }))] }
+                : { role: "user", content: m.content }),
       ],
       ...(tools?.length
         ? { tools: tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.schema } })) }

@@ -172,7 +172,11 @@ function devPanel() {
   const evT = h("input", { value: "Training", size: 10 }), evS = h("input", { value: "18:00", size: 5 }), evE = h("input", { value: "19:30", size: 5 });
   const fsel = h("select", {}, S.friends.map((f) => h("option", { value: f.phone }, f.name)));
   const ftext = h("input", { placeholder: "friend replies…", size: 20 });
-  const box = h("div", { class: "outbox" }, outbox.length ? outbox.map((m) => h("div", {}, h("b", {}, m.direction === "out" ? `→ ${m.handle}: ` : `← ${m.handle}: `), m.body)) : "No messages yet.");
+  const body = (m) => {
+    const img = /^\[image (img-[\w-]+)\]/.exec(m.body);
+    return img ? h("img", { src: `/api/dev/image/${img[1]}`, class: "outimg", alt: "image sent" }) : m.body;
+  };
+  const box = h("div", { class: "outbox" }, outbox.length ? outbox.map((m) => h("div", {}, h("b", {}, m.direction === "out" ? `→ ${m.handle}: ` : `← ${m.handle}: `), body(m))) : "No messages yet.");
   queueMicrotask(() => { box.scrollTop = box.scrollHeight; });
   const me = S.user.phone;
   return h("details", { class: "dev", open: localStorage.devopen === "1", ontoggle: (e) => { localStorage.devopen = e.target.open ? "1" : "0"; } },

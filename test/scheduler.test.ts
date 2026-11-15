@@ -194,7 +194,9 @@ test("a friend who was never needed doesn't learn the habit, even at the end", a
   let day = MON;
   for (let i = 0; i < 3; i++) { s.store.setSignal(s.user.id, day, "app_minutes:Instagram", 30); await s.scheduler.tick(zonedTime(day, "22:05", TZ)); day = addDays(day, 1); }
   await s.scheduler.tick(zonedTime(day, "08:00", TZ));
-  const final = s.out(FRIEND_PHONE);
+  const all = s.out(FRIEND_PHONE);
+  assert.equal(all.filter((m) => m.startsWith("[image ")).length, 1, "the friend gets the day-60 card");
+  const final = all.filter((m) => !m.startsWith("[image "));
   assert.equal(final.length, 1);
   assert.match(final[0], /just finished 3 days of their new habit/);
   assert.ok(!final[0].includes(instagramPlan.title));

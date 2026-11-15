@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { Store, UserRow, FriendRow, HabitRow } from "../db.js";
 import type { Integrations, SourceId } from "../integrations/mock.js";
 import type { InboundEvent, InboundHandler, Messenger } from "../messaging/messenger.js";
-import type { LlmClient } from "./llm.js";
+import type { ImagePart, LlmClient } from "./llm.js";
 import { runAgent, type Tool } from "./runtime.js";
 import { HabitPlanSchema, type HabitPlan } from "./plan.js";
 import { HabitActions } from "../engine/actions.js";
@@ -56,6 +56,12 @@ export class LetsGrowAgent {
         const p = self.resolve(handle);
         if (p.kind !== "unknown") d.store.addChat(partyId(p), "assistant", body, d.now(), "imessage");
       },
+      typing: raw.typing ? (h, on) => raw.typing!(h, on) : undefined,
+      sendImage: raw.sendImage ? async (handle, png, caption) => {
+        await raw.sendImage!(handle, png, caption);
+        const p = self.resolve(handle);
+        if (p.kind !== "unknown") d.store.addChat(partyId(p), "assistant", `[sent an image]${caption ? ` ${caption}` : ""}`, d.now(), "imessage");
+      } : undefined,
       start: (h: InboundHandler) => raw.start(h),
       stop: () => raw.stop(),
     };
@@ -67,7 +73,11 @@ export class LetsGrowAgent {
   async onInbound(e: InboundEvent): Promise<void> {
     const { store, now } = this.d;
     const party = this.resolve(e.handle);
-    const text = e.kind === "text" ? (e.text ?? "") : e.kind === "reaction" ? `[tapback ${e.emoji}]` : "[sent an attachment]";
+    const images = e.kind === "image" ? (e.images ?? []) : [];
+    const text = e.kind === "text" ? (e.text ?? "")
+      : e.kind === "reaction" ? `[tapback ${e.emoji}]`
+      : e.kind === "image" ? (images.length ? `[sent ${images.length > 1 ? `${images.length} photos` : "a photo"}]${e.text ? ` ${e.text}` : ""}` : `[sent a photo that couldn't be opened]${e.text ? ` ${e.text}` : ""}`)
+      : "[sent an attachment]";
     const events: string[] = [];
 
     // Facts, not interpretation: the first text from a person is what connects them.
@@ -81,8 +91,15 @@ export class LetsGrowAgent {
       events.push(`${party.friend.name} just joined as ${party.owner.name}'s accountability friend with this text. Welcome them and explain briefly what you'll do.`);
     }
 
-    const reply = await this.respond(this.resolve(e.handle), text, "imessage", events);
-    if (reply) await this.messenger.send(replyTarget(party, e.handle), reply);
+    const to = replyTarget(party, e.handle);
+    // "…" bubble while the agent thinks; the reply itself clears it.
+    await this.d.messenger.typing?.(to, true);
+    try {
+      const reply = await this.respond(this.resolve(e.handle), text, "imessage", events, images);
+      if (reply) await this.messenger.send(to, reply);
+    } finally {
+      await this.d.messenger.typing?.(to, false);
+    }
   }
 
   /** The website chat. Same agent, same thread as iMessage. */
@@ -113,7 +130,7 @@ export class LetsGrowAgent {
 
   // ---------- core ----------
 
-  private async respond(party: Party, text: string, channel: "web" | "imessage", events: string[]): Promise<string> {
+  private async respond(party: Party, text: string, channel: "web" | "imessage", events: string[], images: ImagePart[] = []): Promise<string> {
     const { store, llm, now } = this.d;
     const transcript = party.kind === "unknown" ? "" : this.transcript(partyId(party));
     if (party.kind !== "unknown") store.addChat(partyId(party), "user", text, now(), channel);
@@ -130,7 +147,7 @@ export class LetsGrowAgent {
     ].join("\n");
 
     try {
-      const run = await runAgent({ llm, system: full, input: text, tools });
+      const run = await runAgent({ llm, system: full, input: text, images, tools });
       if (run.calls.length) console.log(`[agent] ${run.calls.map((c) => `${c.name}${c.ok ? "" : " (failed)"}`).join(", ")}`);
       return run.text;
     } catch (err) {
@@ -245,6 +262,7 @@ ${user.name} picks one healthy habit. You work out how to verify it with the lea
 
 ## While a habit is running
 - When they say or show they did it (any wording, emoji, or tapback on your reminder), call log_completion. iPhones forward tapbacks as text such as: Loved “…”, Reacted ❤️ to “…”, or in German „…“ ein Herz hinzugefügt. Treat those as a reaction to the quoted message. The phone writes that text in its own language, so it says nothing about which language to reply in: keep the language of the conversation.
+- Photos count as proof when they clearly show the habit (a rowing monitor with meters and time, a book page, a stretch mat after training). Look at what the photo shows, call log_completion if it fits a waiting reminder, and say what you saw in a few words ("4,200 m in 18 min, counted"). If it doesn't show the habit, say so kindly.
 - If they want friends told sooner or later, use set_friend_nudge_threshold.
 - Answer questions about progress from the state below. Never claim you did something unless a tool call succeeded.
 

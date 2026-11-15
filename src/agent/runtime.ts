@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ChatMessage, LlmClient, ToolDef } from "./llm.js";
+import type { ChatMessage, ImagePart, LlmClient, ToolDef } from "./llm.js";
 
 // A small, standard agent loop: the model calls tools until it has what it needs, then answers.
 // Tool inputs are validated with zod; validation and runtime errors go back to the model so it
@@ -27,6 +27,8 @@ export async function runAgent(args: {
   llm: LlmClient;
   system: string;
   input: string;
+  /** Photos sent with the message, shown to the model alongside the text. */
+  images?: ImagePart[];
   tools: Tool[];
   maxSteps?: number;
   /** Opt-in web search for this agent (see LlmClient.complete). */
@@ -34,7 +36,7 @@ export async function runAgent(args: {
 }): Promise<AgentRun> {
   const { llm, system, tools } = args;
   const defs = tools.map(toolDef);
-  const messages: ChatMessage[] = [{ role: "user", content: args.input }];
+  const messages: ChatMessage[] = [{ role: "user", content: args.input, images: args.images?.length ? args.images : undefined }];
   const calls: AgentRun["calls"] = [];
   const maxSteps = args.maxSteps ?? 8;
 

@@ -267,6 +267,10 @@ export function createApp(d: AppDeps) {
       return c.json(view(user));
     });
     app.get("/api/dev/outbox", (c) => c.json(store.recentMessages(80)));
+    app.get("/api/dev/image/:name", (c) => {
+      const b64 = store.getKv(`image:${c.req.param("name")}`);
+      return b64 ? c.body(Buffer.from(b64, "base64"), 200, { "content-type": "image/png" }) : c.text("not found", 404);
+    });
   }
 
   return app;

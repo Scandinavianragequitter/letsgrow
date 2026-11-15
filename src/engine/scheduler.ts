@@ -7,6 +7,7 @@ import { decideNudge, type EscalationPolicy } from "../policy/escalation.js";
 import { appliesToDay, evaluateAutonomous } from "./verifier.js";
 import { computeStats, friendHelp, trailingMisses } from "./stats.js";
 import { msg } from "./messages.js";
+import { renderCard, type CardData } from "./card.js";
 
 const MIN = 60_000;
 
@@ -199,6 +200,14 @@ export class Scheduler {
         : `${friends.map((f) => f.name).join(" and ")} stepped in ${totalNudges} time${totalNudges === 1 ? "" : "s"} and sent ${totalReplies} message${totalReplies === 1 ? "" : "s"} of support.`;
 
     store.setHabitStatus(h.id, "completed", now);
+    const statuses = store.days(h.id).map((d) => d.status);
+    const card = (c: Omit<CardData, "days" | "done" | "counted" | "longestStreak" | "statuses">) =>
+      renderCard({ days: h.duration_days, done: stats.done, counted: stats.counted, longestStreak: stats.longestStreak, statuses, ...c });
+    const sendCard = async (to: string, c: Parameters<typeof card>[0]) => {
+      if (!messenger.sendImage) return;
+      try { await messenger.sendImage(to, card(c)); } catch (err) { console.warn("day-60 card not sent:", (err as Error).message); }
+    };
+    await sendCard(user.phone, { title: `“${plan.title}”`, footer: friends.length ? `With ${friends.map((f) => f.name).join(" and ")}` : "All you." });
     try {
       await messenger.send(user.phone, await this.say({
         to: user.name,
@@ -210,6 +219,7 @@ export class Scheduler {
     } catch (err) { console.warn("congrats to user failed:", (err as Error).message); }
     for (const f of friends) {
       const r = help.get(f.id) ?? { nudges: 0, replies: 0 };
+      await sendCard(f.phone, friendCardText(user.name, plan.title, r.nudges));
       try {
         await messenger.send(f.phone, await this.say({
           to: f.name,
@@ -223,4 +233,11 @@ export class Scheduler {
       } catch (err) { console.warn(`final message to ${f.id} failed:`, (err as Error).message); }
     }
   }
+}
+
+/** A friend who was never needed doesn't learn the habit, on the card either. */
+export function friendCardText(person: string, habit: string, nudges: number) {
+  return nudges > 0
+    ? { title: `${person}: “${habit}”`, footer: `You stepped in ${nudges} time${nudges === 1 ? "" : "s"}. Part of this is yours.` }
+    : { title: `${person}’s new habit.`, footer: `${person} never needed a nudge. Knowing you were there helped.` };
 }

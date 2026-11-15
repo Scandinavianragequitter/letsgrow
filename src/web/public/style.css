@@ -54,3 +54,4 @@ details.dev summary{cursor:pointer;color:var(--mute);font-weight:600}
 .conn:first-of-type { border-top: 0; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #d2d2d7; margin-right: 10px; vertical-align: middle; }
 .dot.on { background: #34c759; }
+.outimg { display:block; max-width: 220px; border-radius: 12px; margin: 6px 0; }
