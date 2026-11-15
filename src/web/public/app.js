@@ -138,6 +138,25 @@ function friendsCard() {
   return card;
 }
 
+function connectionsCard() {
+  const c = S.connectors;
+  if (!c) return null;
+  const rows = [
+    ["google_calendar", "Google Calendar", c.google_calendar, c.google_configured],
+    ["apple_calendar", "Apple Calendar", c.apple_calendar, true],
+    ["apple_health", "Apple Health", c.apple_health, true],
+    ["gmail", "Gmail", c.gmail, c.google_configured],
+  ];
+  const open = async (id) => { const r = await api("/api/connect-link", "POST", { connector: id }); window.open(r.link, "_blank"); };
+  return h("div", { class: "card" }, h("h2", {}, "Connections"),
+    h("p", { class: "mute" }, "Real data replaces demo data as soon as a source is connected."),
+    ...rows.map(([id, label, on, available]) => h("div", { class: "conn" },
+      h("span", {}, h("span", { class: on ? "dot on" : "dot" }), label),
+      on ? h("span", { class: "mute" }, "Connected")
+        : available ? h("button", { class: "ghost", onclick: () => open(id) }, "Connect")
+        : h("span", { class: "mute" }, "Not set up"))));
+}
+
 function connectBanner() {
   if (S.warning) return h("div", { class: "banner warn" }, S.warning);
   if (S.user.connected) return null;
@@ -190,10 +209,11 @@ function render(force) {
   const focused = document.activeElement?.id === "msg";
   const hab = S.habit;
   const right = [];
-  if (!hab || hab.status === "planning") right.push(planCard());
+  if (!hab || hab.status === "planning") right.push(planCard(), connectionsCard());
   else {
     right.push(planCard(), progressCard());
     if (hab.status === "active" || hab.status === "completed") right.push(friendsCard());
+    right.push(connectionsCard());
     right.push(h("button", { class: "ghost", onclick: () => confirm("Start over with a new habit?") && act(() => api("/api/habit/restart", "POST")) }, "Start over"));
   }
   const who = h("div", { class: "mute", style: "text-align:right;font-size:13px" }, `Signed in as ${S.user.name} (${S.user.phone}) · `,

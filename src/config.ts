@@ -21,6 +21,14 @@ export const config = {
   // Photon Beta (2.0): project ID (pho_prj_...) + project API key. PROJECT_ID is accepted as an alias.
   projectId: process.env.PHOTON_PROJECT_ID || process.env.PROJECT_ID || "",
   photonApiKey: process.env.PHOTON_API_KEY ?? "",
+  // Google sign-in for Calendar + Gmail (Google Cloud OAuth client, type "Web application").
+  // The redirect URI must be registered on that client exactly. Default works when you click the link on this laptop.
+  google: process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET ? {
+    clientId: process.env.GOOGLE_CLIENT_ID,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+    redirectUri: process.env.GOOGLE_REDIRECT_URI || `http://localhost:${process.env.PORT || 3000}/oauth/google/callback`,
+  } : undefined,
+  syncMinutes: num("SYNC_MINUTES", 10),
   sharedLineNumber: process.env.SHARED_LINE_NUMBER ?? "+16289988199",
   durationDays: num("DURATION_DAYS", 60),
   defaultTz: process.env.DEFAULT_TZ ?? "America/New_York",

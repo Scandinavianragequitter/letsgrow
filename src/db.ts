@@ -197,6 +197,28 @@ export class Store {
     return Number(this.run("INSERT OR IGNORE INTO seen_messages(id,seen_at) VALUES(?,?)", id, now).changes) > 0;
   }
 
+  // connectors: one row per user and provider ("google", "ics", "health"), data is provider JSON
+  setConnection(userId: string, provider: string, data: unknown, now: number) {
+    this.run("INSERT INTO connections(user_id,provider,data_json,created_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(user_id,provider) DO UPDATE SET data_json=excluded.data_json, updated_at=excluded.updated_at",
+      userId, provider, JSON.stringify(data), now, now);
+  }
+  getConnection<T = any>(userId: string, provider: string): T | undefined {
+    const r = this.get<{ data_json: string }>("SELECT data_json FROM connections WHERE user_id=? AND provider=?", userId, provider);
+    return r ? (JSON.parse(r.data_json) as T) : undefined;
+  }
+  connections() { return this.all<{ user_id: string; provider: string; data_json: string }>("SELECT user_id,provider,data_json FROM connections"); }
+  removeConnection(userId: string, provider: string) { this.run("DELETE FROM connections WHERE user_id=? AND provider=?", userId, provider); }
+  /** Replace a user's synced events from one source inside [fromMs, toMs). */
+  replaceSyncedEvents(userId: string, source: string, fromMs: number, toMs: number, events: { title: string; startMs: number; endMs: number }[]) {
+    this.run("DELETE FROM synced_events WHERE user_id=? AND source=? AND start_ms>=? AND start_ms<?", userId, source, fromMs, toMs);
+    const ins = this.db.prepare("INSERT INTO synced_events(user_id,source,title,start_ms,end_ms) VALUES(?,?,?,?,?)");
+    for (const e of events) ins.run(userId, source, e.title, e.startMs, e.endMs);
+  }
+  syncedEvents(userId: string, fromMs: number, toMs: number) {
+    return this.all<{ source: string; title: string; start_ms: number; end_ms: number }>(
+      "SELECT source,title,start_ms,end_ms FROM synced_events WHERE user_id=? AND start_ms>=? AND start_ms<? ORDER BY start_ms", userId, fromMs, toMs);
+  }
+
   recentMessages(limit = 60) {
     return this.all<OutboxRow>("SELECT * FROM (SELECT * FROM outbox ORDER BY id DESC LIMIT ?) ORDER BY id", limit);
   }
@@ -215,6 +237,9 @@ CREATE TABLE IF NOT EXISTS friend_events(id INTEGER PRIMARY KEY AUTOINCREMENT, h
 CREATE TABLE IF NOT EXISTS pending_nudges(id INTEGER PRIMARY KEY AUTOINCREMENT, habit_id TEXT NOT NULL, day TEXT NOT NULL, send_at INTEGER NOT NULL, sent_at INTEGER, note TEXT);
 CREATE TABLE IF NOT EXISTS signals(user_id TEXT NOT NULL, day TEXT NOT NULL, key TEXT NOT NULL, value REAL NOT NULL, PRIMARY KEY(user_id, day, key));
 CREATE TABLE IF NOT EXISTS mock_events(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, day TEXT NOT NULL, title TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS connections(user_id TEXT NOT NULL, provider TEXT NOT NULL, data_json TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY(user_id, provider));
+CREATE TABLE IF NOT EXISTS synced_events(user_id TEXT NOT NULL, source TEXT NOT NULL, title TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS synced_events_user ON synced_events(user_id, start_ms);
 CREATE TABLE IF NOT EXISTS contacts(handle TEXT PRIMARY KEY, space_id TEXT NOT NULL, agent_id TEXT NOT NULL, updated_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS seen_messages(id TEXT PRIMARY KEY, seen_at INTEGER NOT NULL);

@@ -50,3 +50,7 @@ details.dev summary{cursor:pointer;color:var(--mute);font-weight:600}
 .bubble .via { font-size: 11px; opacity: .55; margin-top: 4px; }
 .qrwrap { display: flex; align-items: center; gap: 14px; margin: 10px 0; }
 .qrwrap .qr { width: 132px; height: 132px; background: #fff; padding: 6px; border-radius: 10px; }
+.conn { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-top: 1px solid rgba(0,0,0,.06); }
+.conn:first-of-type { border-top: 0; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #d2d2d7; margin-right: 10px; vertical-align: middle; }
+.dot.on { background: #34c759; }

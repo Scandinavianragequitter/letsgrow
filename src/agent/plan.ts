@@ -26,7 +26,7 @@ export const HabitPlanSchema = z
     daysOfWeek: z.array(z.number().int().min(0).max(6)).max(7).optional(),
     autonomous: z
       .object({
-        source: z.enum(["screen_time", "health", "calendar"]),
+        source: z.enum(["screen_time", "health", "calendar", "email"]),
         metric: z.string().min(1).max(60),
         comparator: z.enum(["lte", "gte"]),
         threshold: z.number(),

@@ -7,7 +7,7 @@ import { addDays, weekday, zonedTime } from "../clock.js";
 
 export interface CalEvent { title: string; startMs: number; endMs: number }
 
-export type SourceId = "screen_time" | "health" | "calendar";
+export type SourceId = "screen_time" | "health" | "calendar" | "email";
 
 export interface SourceInfo {
   source: SourceId;
@@ -27,7 +27,7 @@ export interface Integrations {
   /** What this user has connected. The agent reads this instead of a hardcoded description. */
   catalog(userId: string): SourceInfo[];
   /** Look at this user's actual data so plans are grounded in what exists. */
-  probe(userId: string, tz: string, today: string, req: ProbeRequest): unknown;
+  probe(userId: string, tz: string, today: string, req: ProbeRequest): unknown | Promise<unknown>;
 }
 
 const SCREEN_TIME_APPS = ["Instagram", "TikTok", "YouTube", "WhatsApp", "Safari", "X", "Reddit"];
@@ -67,6 +67,7 @@ export class MockIntegrations implements Integrations {
     const past = Array.from({ length: 7 }, (_, i) => addDays(today, i - 7));
     const series = (source: string, metric: string) =>
       past.map((day) => ({ day, value: this.metric(userId, source, metric, day) }));
+    if (req.source === "email") return { error: "No email connected." };
     if (req.source === "screen_time" || req.source === "health") {
       if (req.metric) return { source: req.source, metric: req.metric, last7Days: series(req.source, req.metric) };
       const metrics = req.source === "screen_time"

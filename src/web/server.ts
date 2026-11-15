@@ -11,6 +11,7 @@ import type { HabitPlan } from "../agent/plan.js";
 import type { Scheduler } from "../engine/scheduler.js";
 import type { LetsGrowAgent } from "../agent/agent.js";
 import { INVITE_TEXT, type HabitActions } from "../engine/actions.js";
+import { registerConnectRoutes, type ConnectDeps } from "./connect-routes.js";
 import type { LineAssigner } from "../messaging/assigner.js";
 import { ConsoleMessenger, type Messenger } from "../messaging/messenger.js";
 import { PRESETS, policyFromPreset, policyFromSuggestion, type EscalationPolicy } from "../policy/escalation.js";
@@ -24,6 +25,8 @@ export interface AppDeps {
   consoleTransport?: ConsoleMessenger;
   store: Store; clock: Clock; agent: LetsGrowAgent; actions: HabitActions; scheduler: Scheduler;
   messenger: Messenger; assigner: LineAssigner; devPanel: boolean;
+  /** Real data connectors (optional; without them everything runs on demo data). */
+  connect?: ConnectDeps;
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -85,6 +88,7 @@ export function createApp(d: AppDeps) {
       invite: inviteUrl && { url: inviteUrl, text: `${INVITE_TEXT} ${inviteUrl}`, sms: `sms:&body=${encodeURIComponent(`${INVITE_TEXT} ${inviteUrl}`)}` },
       presets: Object.entries(PRESETS).map(([id, p]) => ({ id, label: p.label, policy: policyFromPreset(id) })),
       dev: d.devPanel, messengerMode: d.messenger.mode,
+      connectors: d.connect ? d.connect.hub.status(user.id) : null,
     };
   }
 
@@ -93,6 +97,16 @@ export function createApp(d: AppDeps) {
   app.get("/app.js", (c) => c.body(asset("app.js"), 200, { "content-type": "text/javascript" }));
   app.get("/style.css", (c) => c.body(asset("style.css"), 200, { "content-type": "text/css" }));
   app.get("/join/:token", (c) => c.html(asset("join.html")));
+  if (d.connect) {
+    registerConnectRoutes(app, d.connect);
+    const connect = d.connect;
+    app.post("/api/connect-link", async (c) => {
+      const user = userOf(c);
+      if (!user) return c.json({ error: "not signed in" }, 401);
+      const { connector } = await c.req.json<{ connector: "google_calendar" | "gmail" | "apple_health" | "apple_calendar" }>();
+      return c.json(connect.links.link(user.id, connector));
+    });
+  }
 
   // QR codes. /qr is a full-screen code for the site itself (put it on the projector);
   // /qr.svg?text=... renders a code for a link on this site (e.g. a friend invite).

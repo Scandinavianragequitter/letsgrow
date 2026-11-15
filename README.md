@@ -57,18 +57,15 @@ How it talks to Photon (`src/messaging/photon-beta.ts`):
 
 Shared-line rules that shape the product: direct chats only, and the agent can only text someone who is assigned **and has texted the line first**. That's why signup asks you to text "hi" and the join page asks friends to text "ping". Reminders wait until you've connected.
 
-## Swapping the mock data for real data
-`src/integrations/mock.ts` implements `Integrations` (`metric()` and `events()`). It serves seeded data (`MOCK_AUTOFILL=1`) overridden by whatever you set in the demo panel. Replace it with real sources:
-- **Screen Time**: Apple offers no server API. You need an iOS app using FamilyControls/DeviceActivity that uploads daily totals.
-- **Health**: HealthKit (also on-device) or a cloud aggregator.
-- **Calendar**: Google Calendar / Microsoft Graph / CalDAV.
+## Real data
+Connected sources replace demo data per person: **Apple Calendar** (public calendar link shared into the chat), **Google Calendar** and **Gmail** (one-click Google sign-in), and **Apple Health** (a daily upload from an iPhone Shortcut or the Health Auto Export app). The agent knows what's connected and sends a personal connect link when a source would help. Setup and limits: [`docs/connectors.md`](docs/connectors.md). Screen Time stays demo data (no server API); code is in `src/integrations/`.
 
 ## Layout
 ```
 src/agent/        agent + tools, agent loop, plan schema, Anthropic/OpenRouter clients
 src/engine/       habit actions, scheduler, verifier, fallback copy, stats
 src/policy/       escalation policy and presets
-src/integrations/ mock Screen Time / Health / Calendar
+src/integrations/ connector hub, Apple calendar links (ics), Google, Apple Health ingest, demo data
 src/messaging/    console + Photon Beta messengers, shared-line assigner
 src/web/          Hono server + static UI
 test/             node:test (policy, clock, scheduler incl. a full 60-day run, agent tools with a scripted model, OpenRouter format, HTTP flow)

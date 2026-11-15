@@ -9,6 +9,8 @@ import { HabitActions } from "../engine/actions.js";
 import { dayKey, addDays, zonedTime } from "../clock.js";
 import { computeStats, friendHelp } from "../engine/stats.js";
 import type { EscalationPolicy } from "../policy/escalation.js";
+import type { ConnectorHub } from "../integrations/hub.js";
+import type { ConnectLinks } from "../engine/connect.js";
 
 // The Let'sGrow agent. Every message from a person (website chat or iMessage) goes through one
 // tool-using model call with the full situation in context. The code does not try to interpret
@@ -29,6 +31,9 @@ export interface AgentDeps {
   /** Raw transport. The agent wraps it so every message lands in the person's thread. */
   messenger: Messenger;
   now: () => number;
+  /** Real connectors (calendar links, Google, Apple Health). Without them the agent works on demo data. */
+  hub?: ConnectorHub;
+  links?: ConnectLinks;
 }
 
 export class LetsGrowAgent {
@@ -208,6 +213,7 @@ export class LetsGrowAgent {
         input: z.object({ missed_days: z.number().int().min(1).max(5) }),
         run: (i: { missed_days: number }) => ({ policy: actions.setFriendThreshold(fresh(), i.missed_days) }),
       },
+      ...this.connectorTools(user),
       {
         name: "cancel_habit",
         description: "Stop the current habit or proposal so a new one can be planned. Only after the user clearly asked for it.",
@@ -235,6 +241,9 @@ ${user.name} picks one healthy habit. You work out how to verify it with the lea
 - If they want friends told sooner or later, use set_friend_nudge_threshold.
 - Answer questions about progress from the state below. Never claim you did something unless a tool call succeeded.
 
+## Connecting real data
+The data sources say whether they are connected (real data) or not (demo data). When a habit would be checked better with a source that isn't connected, say so in a sentence and send the personal link from request_connection. Google Calendar and Gmail are one tap (Google's Allow screen); Apple Health is a one-time Shortcut setup on the iPhone; for an Apple calendar, ask them to share a public calendar link in this chat. When they send a webcal:// or .ics link, call connect_calendar_link with it. Gmail is only for checks that leave a trace by email (e.g. an app's streak email, a booking confirmation); only read what the check needs.
+
 ## Web search
 If web search is available, use it when current outside facts would make the plan or answer better (a gym's opening hours, a class schedule, a sensible target for a sport). Don't search for things you know or for anything about the user; mention the source briefly when you rely on it.
 
@@ -243,11 +252,49 @@ ${JSON.stringify(this.userState(user), null, 2)}`;
     return { system, tools };
   }
 
+  private connectorTools(user: UserRow): Tool[] {
+    const { hub, links } = this.d;
+    if (!hub || !links) return [];
+    return [
+      {
+        name: "request_connection",
+        description: "Get a personal link that connects one data source in a tap or two. Send the link in your reply with one short sentence on what it's for.",
+        input: z.object({ connector: z.enum(["google_calendar", "gmail", "apple_health", "apple_calendar"]) }),
+        run: (i: { connector: "google_calendar" | "gmail" | "apple_health" | "apple_calendar" }) => {
+          if ((i.connector === "google_calendar" || i.connector === "gmail") && !hub.status(user.id).google_configured) {
+            return { error: "Google sign-in isn't configured on this server. Offer an Apple calendar link instead, or skip." };
+          }
+          return links.link(user.id, i.connector);
+        },
+      },
+      {
+        name: "connect_calendar_link",
+        description: "Connect a published calendar from a link the user sent (webcal:// or https://…ics, e.g. an Apple Public Calendar). Returns upcoming events so you can confirm.",
+        input: z.object({ url: z.string().min(8) }),
+        run: async (i: { url: string }) => hub.connectCalendarLink(user.id, i.url),
+      },
+      {
+        name: "search_email",
+        description: "Search the user's Gmail (Gmail search syntax) in the last N days. Returns sender, subject and date only. Use only to check a habit or to plan one; never browse their inbox.",
+        input: z.object({ query: z.string().min(2), days: z.number().int().min(1).max(30).default(7) }),
+        run: async (i: { query: string; days: number }) => {
+          if (!hub.status(user.id).gmail) return { error: "Gmail is not connected. Use request_connection gmail." };
+          const r = await hub.searchEmail(user.id, i.query, i.days);
+          return { count: r.count, messages: r.messages.map((m) => ({ from: m.from, subject: m.subject, date: m.date })) };
+        },
+      },
+    ];
+  }
+
   /** Check a proposed plan against the user's actual data (grounding, not interpretation). */
   private groundingProblem(user: UserRow, today: string, plan: HabitPlan): string | undefined {
     const { integrations } = this.d;
     if (plan.mode === "autonomous" && plan.autonomous) {
       const a = plan.autonomous;
+      if (a.source === "email") {
+        if (!this.d.hub?.status(user.id).gmail) return "Gmail isn't connected. Send them the link from request_connection gmail first, or plan a different check.";
+        return undefined; // counted live by the sync loop; probe_data_source email shows what matches
+      }
       if (a.source === "calendar") return "The calendar can time reminders but cannot measure a habit. Use screen_time or health, or a prompted plan.";
       const values = Array.from({ length: 7 }, (_, i) => integrations.metric(user.id, a.source, a.metric, addDays(today, i - 7)));
       if (values.every((v) => v === null)) return `No ${a.source} data for metric "${a.metric}" in the last 7 days. Probe the source to see which metrics exist.`;
@@ -266,7 +313,7 @@ ${JSON.stringify(this.userState(user), null, 2)}`;
   private userState(user: UserRow) {
     const { store, actions, now } = this.d;
     const habit = store.currentHabit(user.id);
-    const base = { connectedOnIMessage: !!user.connected };
+    const base = { connectedOnIMessage: !!user.connected, connectors: this.d.hub ? this.d.hub.status(user.id) : "demo data only" };
     if (!habit) return { ...base, habit: null };
     const plan = habit.plan_json ? (JSON.parse(habit.plan_json) as HabitPlan) : null;
     const policy = JSON.parse(habit.escalation_json) as EscalationPolicy;
