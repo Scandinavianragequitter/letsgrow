@@ -66,8 +66,9 @@ No setup. In the iPhone Calendar app: *Calendars → ⓘ next to the calendar �
 
 | Agent | Sees | Can send to |
 |---|---|---|
-| Coach (`agent.ts`, user turn) | Your chat, plan, calendar, Health, verdicts | Only you (the reply address is fixed in code) |
+| Coach (`agent.ts`, user turn) | Your chat, plan, calendar, Health, verdicts. Hands email and web questions to the two helpers | Only you (the reply address is fixed in code) |
 | Gmail checker (`gmail-verifier.ts`) | Matching emails | Nobody. Returns a validated verdict only |
+| Web researcher (`researcher.ts`) | Only the coach's question (checked for names and numbers) | Nobody. The only agent with web search; returns a short answer with sources |
 | Friend agent (`agent.ts`, friend turn) | Missed/done counts, the habit name once revealed | That friend, and messages from the friend on to you |
 | Nudges and wrap-ups (`agent.write`) | Only the facts the engine passes in | Whoever the engine addresses |
 

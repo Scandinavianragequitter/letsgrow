@@ -11,26 +11,33 @@ export type ChatMessage =
   | { role: "assistant"; content: string; toolCalls?: ToolCall[]; raw?: unknown }
   | { role: "tool"; toolCallId: string; name: string; content: string };
 
-export interface LlmResult { text: string; toolCalls: ToolCall[]; raw?: unknown; webSearches?: number }
+export interface LlmResult { text: string; toolCalls: ToolCall[]; raw?: unknown; webSearches?: number; sources?: { title: string; url: string }[] }
 export interface LlmClient {
   readonly label: string;
-  /** serverTools: false switches off provider-run tools like web search (their queries leave the system). */
-  complete(args: { system: string; messages: ChatMessage[]; tools?: ToolDef[]; maxTokens?: number; serverTools?: boolean }): Promise<LlmResult>;
+  /** Whether `webSearch: true` works with this model (Claude's built-in search). */
+  readonly canSearchWeb?: boolean;
+  /**
+   * webSearch: opt-in, per call. Only the web researcher turns it on: a search query is a way for text
+   * to leave the system, so agents that hold private data or read other people's text never get it.
+   */
+  complete(args: { system: string; messages: ChatMessage[]; tools?: ToolDef[]; maxTokens?: number; webSearch?: boolean }): Promise<LlmResult>;
 }
 
 export class AnthropicLlm implements LlmClient {
   private client: Anthropic;
   readonly label: string;
   /**
-   * webSearchMaxUses > 0 turns on Claude's built-in web search (run by Anthropic, billed per search).
-   * Only used on calls that pass tools, i.e. the agent loop, not one-off message writing.
+   * webSearchMaxUses > 0 makes Claude's built-in web search available (run by Anthropic, billed per
+   * search) to calls that ask for it with webSearch: true.
    */
   constructor(apiKey: string, private model: string, private webSearchMaxUses = 0) {
     this.client = new Anthropic({ apiKey });
     this.label = `anthropic:${model}${webSearchMaxUses ? "+web_search" : ""}`;
+    this.canSearchWeb = webSearchMaxUses > 0;
   }
+  readonly canSearchWeb: boolean;
 
-  async complete({ system, messages, tools, maxTokens = 1500, serverTools = true }: Parameters<LlmClient["complete"]>[0]): Promise<LlmResult> {
+  async complete({ system, messages, tools, maxTokens = 1500, webSearch = false }: Parameters<LlmClient["complete"]>[0]): Promise<LlmResult> {
     // Anthropic wants tool results as user-role blocks, and consecutive tool results in one message.
     const out: Anthropic.MessageParam[] = [];
     for (const m of messages) {
@@ -54,7 +61,7 @@ export class AnthropicLlm implements LlmClient {
       }
     }
     const toolList: Anthropic.ToolUnion[] = (tools ?? []).map((t) => ({ name: t.name, description: t.description, input_schema: t.schema as never }));
-    if (tools?.length && serverTools && this.webSearchMaxUses > 0) toolList.push({ type: "web_search_20250305", name: "web_search", max_uses: this.webSearchMaxUses });
+    if (webSearch && this.webSearchMaxUses > 0) toolList.push({ type: "web_search_20250305", name: "web_search", max_uses: this.webSearchMaxUses });
 
     // Server tools can pause a long turn; continue it by sending the partial turn back.
     const blocks: Anthropic.ContentBlock[] = [];
@@ -67,13 +74,17 @@ export class AnthropicLlm implements LlmClient {
     }
     let text = "";
     let webSearches = 0;
+    const sources: { title: string; url: string }[] = [];
     const toolCalls: ToolCall[] = [];
     for (const block of blocks) {
       if (block.type === "text") text += block.text;
       else if (block.type === "tool_use") toolCalls.push({ id: block.id, name: block.name, input: block.input });
       else if (block.type === "server_tool_use" && block.name === "web_search") webSearches++;
+      else if (block.type === "web_search_tool_result" && Array.isArray(block.content)) {
+        for (const r of block.content) if (r.type === "web_search_result") sources.push({ title: r.title, url: r.url });
+      }
     }
-    return { text: text.trim(), toolCalls, raw: blocks, webSearches };
+    return { text: text.trim(), toolCalls, raw: blocks, webSearches, sources };
   }
 }
 

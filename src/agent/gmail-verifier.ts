@@ -54,7 +54,7 @@ export class GmailVerifier {
         input: `Question: ${req.question}\nLook at the last ${req.days} day(s).${req.queryHint ? `\nSuggested search: ${req.queryHint}` : ""}`,
         tools,
         maxSteps: 5,
-        serverTools: false,
+        webSearch: false,
       });
     } catch (err) {
       console.warn("gmail verifier failed:", (err as Error).message);

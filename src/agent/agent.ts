@@ -12,6 +12,7 @@ import type { EscalationPolicy } from "../policy/escalation.js";
 import type { ConnectorHub } from "../integrations/hub.js";
 import type { ConnectLinks } from "../engine/connect.js";
 import { GmailVerifier } from "./gmail-verifier.js";
+import { WebResearcher, personalDetailsIn } from "./researcher.js";
 
 // The Let'sGrow agent. Every message from a person (website chat or iMessage) goes through one
 // tool-using model call with the full situation in context. The code does not try to interpret
@@ -41,9 +42,11 @@ export class LetsGrowAgent {
   /** Use this messenger everywhere (scheduler too) so proactive texts are part of the thread. */
   readonly messenger: Messenger;
   private gmailVerifier?: GmailVerifier;
+  private researcher: WebResearcher;
 
   constructor(private d: AgentDeps) {
     if (d.hub) this.gmailVerifier = new GmailVerifier({ llm: d.llm, hub: d.hub });
+    this.researcher = new WebResearcher({ llm: d.llm });
     const self = this;
     const raw = d.messenger;
     this.messenger = {
@@ -217,6 +220,7 @@ export class LetsGrowAgent {
         run: (i: { missed_days: number }) => ({ policy: actions.setFriendThreshold(fresh(), i.missed_days) }),
       },
       ...this.connectorTools(user),
+      ...this.researchTool(user),
       {
         name: "cancel_habit",
         description: "Stop the current habit or proposal so a new one can be planned. Only after the user clearly asked for it.",
@@ -247,12 +251,33 @@ ${user.name} picks one healthy habit. You work out how to verify it with the lea
 ## Connecting real data
 The data sources say whether they are connected (real data) or not (demo data). When a habit would be checked better with a source that isn't connected, say so in a sentence and send the personal link from request_connection. Google Calendar and Gmail are one tap (Google's Allow screen); Apple Health is a one-time Shortcut setup on the iPhone; for an Apple calendar, ask them to share a public calendar link in this chat. When they send a webcal:// or .ics link, call connect_calendar_link with it. Gmail is only for checks that leave a trace by email (e.g. an app's streak email, a booking confirmation). You never read email yourself: check_email asks a separate, quarantined checker and returns only found / not found / unclear.
 
-## Web search
-If web search is available, use it when current outside facts would make the plan or answer better (a gym's opening hours, a class schedule, a sensible target for a sport). Don't search for things you know or for anything about the user; mention the source briefly when you rely on it.
+## Your helpers
+You don't search the web or read email yourself; you hand those to two helpers and get answers back.
+- research: a web researcher for current outside facts that make a plan better (a gym's hours, a class schedule, a sensible target). It sees only your question, so keep it free of personal details. Don't use it for things you know. Mention the source briefly when you rely on it.
+- check_email: the quarantined email checker (see above).
+Use either, both, or neither, as the conversation needs.
 
 ## Current state
 ${JSON.stringify(this.userState(user), null, 2)}`;
     return { system, tools };
+  }
+
+  /** The coach's only way to the web: a helper that sees nothing but the question. */
+  private researchTool(user: UserRow): Tool[] {
+    if (!this.researcher.available) return [];
+    return [{
+      name: "research",
+      description: "Ask the web researcher one factual question (opening hours, a class schedule, a sensible target for a sport). It sees ONLY your question, so write it self-contained and leave out anything personal: no names, numbers, health details or habits of the user.",
+      input: z.object({ question: z.string().min(8).max(300) }),
+      run: async (i: { question: string }) => {
+        const { store } = this.d;
+        const habit = store.currentHabit(user.id);
+        const known = [user.name, user.phone, ...(habit ? store.friends(habit.id).flatMap((f) => [f.name, f.phone]) : [])];
+        const leaks = personalDetailsIn(i.question, known);
+        if (leaks.length) return { error: `Not sent: the question contains personal details (${leaks.length}). Rephrase it without names or numbers.` };
+        return this.researcher.research(i.question);
+      },
+    }];
   }
 
   private connectorTools(user: UserRow): Tool[] {

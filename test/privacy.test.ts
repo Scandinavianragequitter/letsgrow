@@ -77,7 +77,7 @@ test("the email checker has no way out: no messaging tools, no web search, text 
   assert.deepEqual(v, { status: "unclear", count: 0, confidence: "low" }, "a report carrying text is refused");
   for (const c of llm.calls) {
     assert.deepEqual(c.tools?.map((t) => t.name), ["search_email", "report_result"]);
-    assert.equal((c as any).serverTools, false, "no web search for the checker");
+    assert.notEqual((c as any).webSearch, true, "no web search for the checker");
   }
 });
 
@@ -101,4 +101,40 @@ test("probing email for planning returns a count, not senders or subjects", asyn
   const p = await s.hub.probe(s.user.id, TZ, "2026-11-16", { source: "email", metric: "from:duolingo" }) as any;
   assert.deepEqual(Object.keys(p).sort(), ["data", "matchesLast7Days", "query", "source"]);
   assert.ok(!JSON.stringify(p).includes("streak"));
+});
+
+const isResearcher = (c: LlmCall) => c.system.startsWith("You answer one factual question");
+
+test("the web researcher sees only the coach's question; the coach itself never searches", async () => {
+  const llm = new ScriptedLlm((c) => {
+    if (isResearcher(c)) return { text: "Open 8am to 8pm on weekends.", toolCalls: [], sources: [{ title: "Rec Sports hours", url: "https://recsports.vt.edu/hours" }] };
+    const t = lastTool(c);
+    if (!t) return call("research", { question: "Weekend opening hours of McComas Hall gym at Virginia Tech" });
+    return { text: "It's open 8 to 8 on weekends (VT Rec Sports).", toolCalls: [] };
+  }, true);
+  const s = setup(llm);
+  s.store.setSignal(s.user.id, "2026-11-16", "steps", 8123);
+  await s.transport.simulateInbound({ handle: s.user.phone, kind: "text", text: "I want to row at McComas on weekends, when is it open?" });
+
+  const research = llm.calls.filter(isResearcher);
+  assert.equal(research.length, 1);
+  assert.equal((research[0] as any).webSearch, true);
+  assert.equal(research[0].tools, undefined, "no tools besides search");
+  const seen = JSON.stringify(research[0]);
+  for (const secret of ["Carl", "5404492120", "8123", "row at McComas on weekends"]) assert.ok(!seen.includes(secret), `researcher must not see "${secret}"`);
+  for (const c of llm.calls.filter((c) => !isResearcher(c))) assert.notEqual((c as any).webSearch, true, "coach never searches directly");
+  assert.deepEqual(JSON.parse(lastTool(llm.calls.at(-1)!)!.content).sources, [{ title: "Rec Sports hours", url: "https://recsports.vt.edu/hours" }]);
+});
+
+test("a research question with personal details is stopped before it leaves", async () => {
+  const llm = new ScriptedLlm((c) => {
+    if (isResearcher(c)) throw new Error("must not be called");
+    const t = lastTool(c);
+    if (!t) return call("research", { question: "Is 8000 steps a day enough for Carl, phone 540-449-2120?" });
+    return { text: "ok", toolCalls: [] };
+  }, true);
+  const s = setup(llm);
+  await s.transport.simulateInbound({ handle: s.user.phone, kind: "text", text: "is my step goal ok?" });
+  assert.match(lastTool(llm.calls.at(-1)!)!.content, /Not sent: the question contains personal details \(2\)/);
+  assert.equal(llm.calls.filter(isResearcher).length, 0);
 });

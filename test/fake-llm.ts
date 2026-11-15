@@ -11,7 +11,7 @@ export class ScriptedLlm implements LlmClient {
   readonly label = "scripted";
   readonly calls: LlmCall[] = [];
   private n = 0;
-  constructor(private respond: (call: LlmCall, i: number) => LlmResult | Promise<LlmResult>) {}
+  constructor(private respond: (call: LlmCall, i: number) => LlmResult | Promise<LlmResult>, readonly canSearchWeb = false) {}
   async complete(args: LlmCall): Promise<LlmResult> {
     this.calls.push(structuredClone(args));
     return this.respond(args, this.n++);
