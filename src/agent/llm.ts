@@ -14,7 +14,8 @@ export type ChatMessage =
 export interface LlmResult { text: string; toolCalls: ToolCall[]; raw?: unknown; webSearches?: number }
 export interface LlmClient {
   readonly label: string;
-  complete(args: { system: string; messages: ChatMessage[]; tools?: ToolDef[]; maxTokens?: number }): Promise<LlmResult>;
+  /** serverTools: false switches off provider-run tools like web search (their queries leave the system). */
+  complete(args: { system: string; messages: ChatMessage[]; tools?: ToolDef[]; maxTokens?: number; serverTools?: boolean }): Promise<LlmResult>;
 }
 
 export class AnthropicLlm implements LlmClient {
@@ -29,7 +30,7 @@ export class AnthropicLlm implements LlmClient {
     this.label = `anthropic:${model}${webSearchMaxUses ? "+web_search" : ""}`;
   }
 
-  async complete({ system, messages, tools, maxTokens = 1500 }: Parameters<LlmClient["complete"]>[0]): Promise<LlmResult> {
+  async complete({ system, messages, tools, maxTokens = 1500, serverTools = true }: Parameters<LlmClient["complete"]>[0]): Promise<LlmResult> {
     // Anthropic wants tool results as user-role blocks, and consecutive tool results in one message.
     const out: Anthropic.MessageParam[] = [];
     for (const m of messages) {
@@ -53,7 +54,7 @@ export class AnthropicLlm implements LlmClient {
       }
     }
     const toolList: Anthropic.ToolUnion[] = (tools ?? []).map((t) => ({ name: t.name, description: t.description, input_schema: t.schema as never }));
-    if (tools?.length && this.webSearchMaxUses > 0) toolList.push({ type: "web_search_20250305", name: "web_search", max_uses: this.webSearchMaxUses });
+    if (tools?.length && serverTools && this.webSearchMaxUses > 0) toolList.push({ type: "web_search_20250305", name: "web_search", max_uses: this.webSearchMaxUses });
 
     // Server tools can pause a long turn; continue it by sending the partial turn back.
     const blocks: Anthropic.ContentBlock[] = [];

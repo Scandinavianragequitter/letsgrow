@@ -27,7 +27,7 @@ Screen Time stays demo data: Apple offers no way to read it from a server.
 Things to know:
 - **Open Google links on the laptop.** The redirect goes back to `localhost`, so the link only finishes on the machine running Let'sGrow. With a fixed public address (your own domain), register `https://<domain>/oauth/google/callback` and set `GOOGLE_REDIRECT_URI` to it; then links work from any phone.
 - **Testing mode** shows an "unverified app" screen (tap *Continue*) and only works for the test users you added. Gmail read access is a *restricted* scope: to open it to everyone, Google requires an app review and a security assessment.
-- Gmail is read for metadata only (sender, subject, date, a short snippet) and only for searches the agent makes to check a habit.
+- Gmail is read by a separate, quarantined checker agent (`src/agent/gmail-verifier.ts`): it can only search and report, has no messaging tools and no web search, and what leaves it is a validated verdict (found / not found / unclear, a count, a confidence). The coach never sees email text, only that verdict.
 
 ## Apple Health
 
@@ -61,3 +61,14 @@ curl -X POST <upload address> -H 'content-type: application/json' \
 ## Apple Calendar
 
 No setup. In the iPhone Calendar app: *Calendars → ⓘ next to the calendar → Public Calendar → Share Link…* and send it to the Let'sGrow chat. The agent recognises the link, connects it and confirms the events it sees. Anyone with a public link can view that calendar, so share one that only holds what the agent needs (e.g. "Training"). Calendars refresh every `SYNC_MINUTES` (default 10).
+
+## Who can see what, and who can send to whom
+
+| Agent | Sees | Can send to |
+|---|---|---|
+| Coach (`agent.ts`, user turn) | Your chat, plan, calendar, Health, verdicts | Only you (the reply address is fixed in code) |
+| Gmail checker (`gmail-verifier.ts`) | Matching emails | Nobody. Returns a validated verdict only |
+| Friend agent (`agent.ts`, friend turn) | Missed/done counts, the habit name once revealed | That friend, and messages from the friend on to you |
+| Nudges and wrap-ups (`agent.write`) | Only the facts the engine passes in | Whoever the engine addresses |
+
+These are enforced by code (which tools exist, where replies go, schema-checked outputs), not by prompts. `test/privacy.test.ts` checks them.

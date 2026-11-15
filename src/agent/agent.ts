@@ -11,6 +11,7 @@ import { computeStats, friendHelp } from "../engine/stats.js";
 import type { EscalationPolicy } from "../policy/escalation.js";
 import type { ConnectorHub } from "../integrations/hub.js";
 import type { ConnectLinks } from "../engine/connect.js";
+import { GmailVerifier } from "./gmail-verifier.js";
 
 // The Let'sGrow agent. Every message from a person (website chat or iMessage) goes through one
 // tool-using model call with the full situation in context. The code does not try to interpret
@@ -18,7 +19,7 @@ import type { ConnectLinks } from "../engine/connect.js";
 // that each action is valid. Scheduling, verification and the friend-escalation policy stay
 // deterministic (see engine/scheduler.ts and policy/escalation.ts).
 
-type Party =
+export type Party =
   | { kind: "user"; user: UserRow }
   | { kind: "friend"; friend: FriendRow; habit: HabitRow; owner: UserRow }
   | { kind: "unknown"; handle: string };
@@ -39,8 +40,10 @@ export interface AgentDeps {
 export class LetsGrowAgent {
   /** Use this messenger everywhere (scheduler too) so proactive texts are part of the thread. */
   readonly messenger: Messenger;
+  private gmailVerifier?: GmailVerifier;
 
   constructor(private d: AgentDeps) {
+    if (d.hub) this.gmailVerifier = new GmailVerifier({ llm: d.llm, hub: d.hub });
     const self = this;
     const raw = d.messenger;
     this.messenger = {
@@ -76,7 +79,7 @@ export class LetsGrowAgent {
     }
 
     const reply = await this.respond(this.resolve(e.handle), text, "imessage", events);
-    if (reply) await this.messenger.send(e.handle, reply);
+    if (reply) await this.messenger.send(replyTarget(party, e.handle), reply);
   }
 
   /** The website chat. Same agent, same thread as iMessage. */
@@ -242,7 +245,7 @@ ${user.name} picks one healthy habit. You work out how to verify it with the lea
 - Answer questions about progress from the state below. Never claim you did something unless a tool call succeeded.
 
 ## Connecting real data
-The data sources say whether they are connected (real data) or not (demo data). When a habit would be checked better with a source that isn't connected, say so in a sentence and send the personal link from request_connection. Google Calendar and Gmail are one tap (Google's Allow screen); Apple Health is a one-time Shortcut setup on the iPhone; for an Apple calendar, ask them to share a public calendar link in this chat. When they send a webcal:// or .ics link, call connect_calendar_link with it. Gmail is only for checks that leave a trace by email (e.g. an app's streak email, a booking confirmation); only read what the check needs.
+The data sources say whether they are connected (real data) or not (demo data). When a habit would be checked better with a source that isn't connected, say so in a sentence and send the personal link from request_connection. Google Calendar and Gmail are one tap (Google's Allow screen); Apple Health is a one-time Shortcut setup on the iPhone; for an Apple calendar, ask them to share a public calendar link in this chat. When they send a webcal:// or .ics link, call connect_calendar_link with it. Gmail is only for checks that leave a trace by email (e.g. an app's streak email, a booking confirmation). You never read email yourself: check_email asks a separate, quarantined checker and returns only found / not found / unclear.
 
 ## Web search
 If web search is available, use it when current outside facts would make the plan or answer better (a gym's opening hours, a class schedule, a sensible target for a sport). Don't search for things you know or for anything about the user; mention the source briefly when you rely on it.
@@ -274,13 +277,16 @@ ${JSON.stringify(this.userState(user), null, 2)}`;
         run: async (i: { url: string }) => hub.connectCalendarLink(user.id, i.url),
       },
       {
-        name: "search_email",
-        description: "Search the user's Gmail (Gmail search syntax) in the last N days. Returns sender, subject and date only. Use only to check a habit or to plan one; never browse their inbox.",
-        input: z.object({ query: z.string().min(2), days: z.number().int().min(1).max(30).default(7) }),
-        run: async (i: { query: string; days: number }) => {
-          if (!hub.status(user.id).gmail) return { error: "Gmail is not connected. Use request_connection gmail." };
-          const r = await hub.searchEmail(user.id, i.query, i.days);
-          return { count: r.count, messages: r.messages.map((m) => ({ from: m.from, subject: m.subject, date: m.date })) };
+        name: "check_email",
+        description: "Ask the quarantined email checker a yes/no question about the user's Gmail, e.g. \"Did they get a Duolingo streak email today?\". You get back only status (found/not_found/unclear), count and confidence, never email text. Use it to check a habit or to test whether an email-based check would work while planning.",
+        input: z.object({
+          question: z.string().min(5).max(300),
+          gmail_query_hint: z.string().max(200).optional().describe("e.g. from:duolingo"),
+          days: z.number().int().min(1).max(30).default(1),
+        }),
+        run: async (i: { question: string; gmail_query_hint?: string; days: number }) => {
+          if (!this.gmailVerifier) return { error: "Email checking isn't available." };
+          return this.gmailVerifier.verify(user.id, { question: i.question, queryHint: i.gmail_query_hint, days: i.days });
         },
       },
     ];
@@ -389,6 +395,16 @@ const VOICE = `You are Let'sGrow, a warm, brief accountability agent that helps 
 /** A friend learns the habit once they've been asked to step in. */
 export function habitRevealedTo(store: Store, habit: HabitRow, friend: FriendRow): boolean {
   return (friendHelp(store, habit.id).get(friend.id)?.nudges ?? 0) > 0;
+}
+
+/**
+ * Where an agent's reply may go. Fixed by code, not by the model: the coach answers only the user,
+ * a friend's agent only that friend. The only cross-person path is relay_to_user (friend to user).
+ */
+export function replyTarget(p: Party, handle: string): string {
+  if (p.kind === "user") return p.user.phone;
+  if (p.kind === "friend") return p.friend.phone;
+  return handle;
 }
 
 function partyId(p: Exclude<Party, { kind: "unknown" }>) {

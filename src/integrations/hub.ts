@@ -92,8 +92,9 @@ export class ConnectorHub implements Integrations {
       if (!req.metric) return { error: "Give a Gmail search query in `metric`, e.g. from:duolingo." };
       const token = await this.googleToken(userId);
       const from = zonedTime(addDays(today, -7), "00:00", tz), to = zonedTime(addDays(today, 1), "00:00", tz);
-      const r = await google.searchMail(token, google.dayQuery(req.metric, from, to), 10, this.f);
-      return { source: "email", data: "real", query: req.metric, matchesLast7Days: r.count, recent: r.messages.map((m) => ({ from: m.from, subject: m.subject, date: m.date })) };
+      const r = await google.searchMail(token, google.dayQuery(req.metric, from, to), 0, this.f);
+      // Counts only: email text is written by other people and stays out of the coach's context.
+      return { source: "email", data: "real", query: req.metric, matchesLast7Days: r.count };
     }
     return { ...(this.d.mock.probe(userId, tz, today, req) as object), data: "demo" };
   }

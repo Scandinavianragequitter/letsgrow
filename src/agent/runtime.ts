@@ -29,6 +29,8 @@ export async function runAgent(args: {
   input: string;
   tools: Tool[];
   maxSteps?: number;
+  /** false = no provider-run tools (web search) for this agent. */
+  serverTools?: boolean;
 }): Promise<AgentRun> {
   const { llm, system, tools } = args;
   const defs = tools.map(toolDef);
@@ -37,7 +39,7 @@ export async function runAgent(args: {
   const maxSteps = args.maxSteps ?? 8;
 
   for (let step = 0; step < maxSteps; step++) {
-    const out = await llm.complete({ system, messages, tools: defs });
+    const out = await llm.complete({ system, messages, tools: defs, serverTools: args.serverTools });
     for (let n = 0; n < (out.webSearches ?? 0); n++) calls.push({ name: "web_search", input: null, ok: true, result: null });
     if (out.toolCalls.length === 0) return { text: out.text, calls };
     messages.push({ role: "assistant", content: out.text, toolCalls: out.toolCalls, raw: out.raw });
@@ -60,6 +62,6 @@ export async function runAgent(args: {
     }
   }
   // Out of steps: ask for a final answer without tools.
-  const final = await llm.complete({ system, messages: [...messages, { role: "user", content: "(Reply to the person now, without calling tools.)" }], tools: defs });
+  const final = await llm.complete({ system, messages: [...messages, { role: "user", content: "(Reply to the person now, without calling tools.)" }], tools: defs, serverTools: args.serverTools });
   return { text: final.text, calls };
 }

@@ -77,13 +77,16 @@ export async function calendarEvents(token: string, fromMs: number, toMs: number
 
 export interface MailHit { from: string; subject: string; date: string; snippet: string }
 
-/** Gmail search (same syntax as the Gmail search box). Metadata and snippets only, never full bodies. */
-export async function searchMail(token: string, query: string, max = 10, fetchImpl: typeof fetch = fetch): Promise<{ count: number; messages: MailHit[] }> {
-  const q = new URLSearchParams({ q: query, maxResults: String(Math.min(max, 50)) });
+/**
+ * Gmail search (same syntax as the Gmail search box). Counts up to 50 matches and returns metadata and
+ * snippets for the first `details` of them (0 = count only). Never full bodies.
+ */
+export async function searchMail(token: string, query: string, details = 10, fetchImpl: typeof fetch = fetch): Promise<{ count: number; messages: MailHit[] }> {
+  const q = new URLSearchParams({ q: query, maxResults: "50" });
   const list = await api(token, `https://gmail.googleapis.com/gmail/v1/users/me/messages?${q}`, fetchImpl);
   const ids: string[] = (list.messages ?? []).map((m: any) => m.id);
   const messages: MailHit[] = [];
-  for (const id of ids.slice(0, max)) {
+  for (const id of ids.slice(0, details)) {
     const m = await api(token, `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`, fetchImpl);
     const h = (name: string) => (m.payload?.headers ?? []).find((x: any) => x.name.toLowerCase() === name.toLowerCase())?.value ?? "";
     messages.push({ from: h("From"), subject: h("Subject"), date: h("Date"), snippet: m.snippet ?? "" });
