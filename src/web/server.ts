@@ -12,6 +12,7 @@ import type { Scheduler } from "../engine/scheduler.js";
 import type { LetsGrowAgent } from "../agent/agent.js";
 import { INVITE_TEXT, type HabitActions } from "../engine/actions.js";
 import { registerConnectRoutes, type ConnectDeps } from "./connect-routes.js";
+import type { LoginCodes } from "../engine/login.js";
 import type { LineAssigner } from "../messaging/assigner.js";
 import { ConsoleMessenger, type Messenger } from "../messaging/messenger.js";
 import { PRESETS, policyFromPreset, policyFromSuggestion, type EscalationPolicy } from "../policy/escalation.js";
@@ -27,6 +28,8 @@ export interface AppDeps {
   messenger: Messenger; assigner: LineAssigner; devPanel: boolean;
   /** Real data connectors (optional; without them everything runs on demo data). */
   connect?: ConnectDeps;
+  /** When set, signing in requires texting a code from the phone (live site). Without it, signup logs in directly (local demo). */
+  login?: LoginCodes;
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -69,7 +72,7 @@ export function createApp(d: AppDeps) {
       const help = friendHelp(store, habit.id);
       friends = store.friends(habit.id).map((f) => ({
         name: f.name, phone: f.phone, state: f.state,
-        nudges: help.get(f.id)?.nudges ?? 0, replies: help.get(f.id)?.replies ?? 0,
+        nudges: help.get(f.id)?.nudges ?? 0,
       }));
       stats = computeStats(store, habit);
     }
@@ -93,6 +96,7 @@ export function createApp(d: AppDeps) {
   }
 
   // ---------- pages ----------
+  app.get("/healthz", (c) => c.text("ok"));
   app.get("/", (c) => c.html(asset("index.html")));
   app.get("/app.js", (c) => c.body(asset("app.js"), 200, { "content-type": "text/javascript" }));
   app.get("/style.css", (c) => c.body(asset("style.css"), 200, { "content-type": "text/css" }));
@@ -122,16 +126,41 @@ export function createApp(d: AppDeps) {
 <body><h1>Let'sGrow</h1><div class="qr">${await qrSvg(config.publicBaseUrl)}</div><p>${config.publicBaseUrl}</p></body></html>`));
 
   // ---------- user flow ----------
+  const secure = config.publicBaseUrl.startsWith("https://");
+  const signIn = (c: Parameters<typeof setCookie>[0], userId: string) =>
+    setCookie(c, "lg_session", store.createSession(userId), { httpOnly: true, secure, sameSite: "Lax", path: "/", maxAge: 60 * 60 * 24 * 90 });
+
+  // Simple abuse limits for a public site: sign-ups per network address and per phone number, per hour.
+  const hits = new Map<string, number[]>();
+  const limited = (key: string, max: number) => {
+    const now = Date.now();
+    const list = (hits.get(key) ?? []).filter((t) => now - t < 3_600_000);
+    list.push(now); hits.set(key, list);
+    return list.length > max;
+  };
+  const ipOf = (c: { req: { header: (n: string) => string | undefined } }) =>
+    (c.req.header("x-forwarded-for") ?? "").split(",")[0].trim() || c.req.header("x-real-ip") || "local";
+
   app.post("/api/signup", async (c) => {
     const b = await c.req.json<{ name?: string; phone?: string }>();
-    const name = (b.name ?? "").trim();
+    const name = (b.name ?? "").trim().slice(0, 40);
     const phone = normalizePhone(b.phone ?? "");
     if (!name || !phone) return c.json({ error: "Enter your name and a valid phone number (with country code if outside the US)." }, 400);
+    if (limited(`ip:${ipOf(c)}`, 20) || limited(`phone:${phone}`, 6)) return c.json({ error: "Too many tries. Give it a few minutes." }, 429);
     const user = store.getUserByPhone(phone) ?? store.createUser(name, phone, config.defaultTz, clock.now());
-    let warning: string | undefined;
-    warning = await ensureLine(user, true);
-    setCookie(c, "lg_session", store.createSession(user.id), { httpOnly: true, sameSite: "Lax", path: "/", maxAge: 60 * 60 * 24 * 90 });
-    return c.json({ ...view(user), warning });
+    const warning = await ensureLine(user, true);
+    if (!d.login) { signIn(c, user.id); return c.json({ ...view(user), warning }); }
+    // Live site: prove the number is yours by texting the code to your agent (this also connects iMessage).
+    const { ticket, code } = d.login.start(user.id, phone);
+    const line = store.getKv(`line:${phone}`) ?? config.sharedLineNumber;
+    return c.json({ user: null, pending: { ticket, code, number: line, sms: smsHref(line, code) }, warning });
+  });
+
+  app.get("/api/login/:ticket", (c) => {
+    const userId = d.login?.claim(c.req.param("ticket"));
+    if (!userId) return c.json({ verified: false });
+    signIn(c, userId);
+    return c.json({ verified: true, ...view(store.getUser(userId)!) });
   });
 
   app.get("/api/state", async (c) => {
@@ -226,6 +255,26 @@ export function createApp(d: AppDeps) {
     return c.json({ number, sms: smsHref(number, "ping"), userName: owner.name });
   });
 
+  // ---------- presenter control (on stage: play out a slip without typing into iMessage) ----------
+  const presenterOk = (key: string | undefined) => d.devPanel || (!!config.presenterKey && key === config.presenterKey);
+  app.get("/presenter", (c) => {
+    if (!presenterOk(c.req.query("key"))) return c.notFound();
+    return c.html(presenterPage(c.req.query("key") ?? ""));
+  });
+  app.post("/api/presenter/:action", async (c) => {
+    const { key } = await c.req.json<{ key?: string }>().catch(() => ({ key: undefined }));
+    if (!presenterOk(key)) return c.notFound();
+    const user = userOf(c);
+    const habit = user && store.currentHabit(user.id);
+    if (!user || !habit) return c.json({ error: "Sign in on this browser as the person whose habit is running." }, 400);
+    if (c.req.param("action") === "undo") { store.clearSimulatedDays(habit.id); return c.json({ ok: true, note: "Simulated misses removed." }); }
+    if (c.req.param("action") !== "slip") return c.notFound();
+    try {
+      const r = await d.scheduler.simulateSlip(habit.id, clock.now());
+      return c.json({ ok: true, note: r.friendsTexted ? `Missed ${r.missedDays.length} day(s). ${r.friendsTexted} friend(s) texted.` : `Missed ${r.missedDays.length} day(s). No friend has joined, so ${user.name} was asked to invite one.` });
+    } catch (err) { return c.json({ error: (err as Error).message }, 400); }
+  });
+
   // ---------- dev panel (demo helpers) ----------
   if (d.devPanel) {
     const need = (c: Parameters<typeof getCookie>[0]) => userOf(c);
@@ -274,4 +323,26 @@ export function createApp(d: AppDeps) {
   }
 
   return app;
+}
+
+function presenterPage(key: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Presenter</title>
+<style>
+  body{margin:0;min-height:100vh;display:grid;place-items:center;background:#000;color:#f5f5f7;font:17px/1.4 -apple-system,BlinkMacSystemFont,"SF Pro Text",Helvetica,sans-serif}
+  main{text-align:center;max-width:420px;padding:24px}
+  h1{font-weight:600;font-size:28px;letter-spacing:-.02em;margin:0 0 8px}
+  p{color:#86868b;margin:0 0 32px}
+  button{display:block;width:100%;border:0;border-radius:14px;padding:16px;font:inherit;font-weight:600;cursor:pointer;margin-bottom:12px}
+  #slip{background:#f5f5f7;color:#000} #undo{background:#1d1d1f;color:#f5f5f7}
+  #out{min-height:1.4em;color:#86868b;margin-top:16px}
+</style></head><body><main>
+<h1>Skip ahead</h1><p>Plays out a slip now: the days are marked missed and the friend's agent texts them.</p>
+<button id="slip">Simulate a slip</button><button id="undo">Undo</button><div id="out"></div>
+<script>
+const key=${JSON.stringify(key)};
+async function go(a){const o=document.getElementById("out");o.textContent="…";
+  const r=await fetch("/api/presenter/"+a,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({key})});
+  const j=await r.json().catch(()=>({error:"Failed"}));o.textContent=j.note||j.error;}
+document.getElementById("slip").onclick=()=>go("slip");document.getElementById("undo").onclick=()=>go("undo");
+</script></main></body></html>`;
 }

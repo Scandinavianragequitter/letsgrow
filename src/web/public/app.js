@@ -54,13 +54,37 @@ function signupView() {
   const err = h("div", { class: "err" });
   const go = h("button", { onclick: async () => {
     err.textContent = "";
-    try { S = await api("/api/signup", "POST", { name: name.value, phone: phone.value }); if (S.warning) alert(S.warning); render(true); }
-    catch (e) { err.textContent = e.message; }
+    try {
+      const r = await api("/api/signup", "POST", { name: name.value, phone: phone.value });
+      if (r.warning) err.textContent = r.warning;
+      if (r.pending) return codeView(r.pending);
+      S = r; render(true);
+    } catch (e) { err.textContent = e.message; }
   } }, "Get started");
   root.replaceChildren(h("div", { class: "center" },
     h("h1", {}, "Grow one habit."),
     h("p", { class: "mute" }, "Tell an agent the habit you want. It works out how to check on you with the least hassle, and a friend's agent has your back if you slip."),
     h("div", { class: "card" }, h("label", {}, "Name"), name, h("label", {}, "Phone (iMessage)"), phone, h("div", { class: "row" }, go), err)));
+}
+
+/** Live site: prove the number is yours by texting the code to your agent. */
+function codeView(p) {
+  const status = h("p", { class: "mute" }, "Waiting for your text…");
+  root.replaceChildren(h("div", { class: "center" },
+    h("h1", {}, "Text your agent."),
+    h("p", { class: "mute" }, "Send this code from your iPhone. It signs you in and starts your conversation."),
+    h("div", { class: "card codecard" },
+      h("div", { class: "code" }, p.code),
+      h("a", { class: "btn", href: p.sms }, "Open Messages"),
+      h("p", { class: "mute small" }, `to ${p.number}`)),
+    status));
+  const iv = setInterval(async () => {
+    try {
+      const r = await api(`/api/login/${p.ticket}`);
+      if (r.verified) { clearInterval(iv); S = r; render(true); }
+    } catch { status.textContent = "Still waiting…"; }
+  }, 2000);
+  setTimeout(() => { clearInterval(iv); status.textContent = "That code expired. Reload to get a new one."; }, 15 * 60_000);
 }
 
 function chatCard() {
@@ -133,7 +157,7 @@ function friendsCard() {
     h("a", { class: "btn", href: inv.sms }, "Send in iMessage"),
     h("button", { class: "ghost", onclick: async (e) => { await navigator.clipboard.writeText(inv.text); e.target.textContent = "Copied"; } }, "Copy message")));
   if (!S.friends.length) card.append(h("p", { class: "mute" }, "Nobody has joined yet."));
-  for (const f of S.friends) card.append(h("div", { class: "friend" }, h("span", {}, f.name, " ", h("span", { class: "mute" }, f.state === "active" ? "" : "(waiting for their first text)")), h("span", { class: "mute" }, `asked ${f.nudges}× · replied ${f.replies}×`)));
+  for (const f of S.friends) card.append(h("div", { class: "friend" }, h("span", {}, f.name, " ", h("span", { class: "mute" }, f.state === "active" ? "" : "(waiting for their first text)")), h("span", { class: "mute" }, `asked ${f.nudges}×`)));
   card.append(escalationSelect());
   return card;
 }
@@ -202,7 +226,7 @@ function devPanel() {
 function render(force) {
   if (!S || !S.user) {
     // Build the signup form once; rebuilding it on every poll wiped what the user typed.
-    if (!document.getElementById("su-name")) signupView();
+    if (!document.getElementById("su-name") && !document.querySelector(".codecard")) signupView();
     lastJson = null;
     return;
   }

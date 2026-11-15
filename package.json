@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
     "simulate": "tsx scripts/simulate.ts",
-    "demo": "node scripts/demo.mjs"
+    "demo": "node scripts/demo.mjs",
+    "serve": "tsx src/main.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.8.0",
@@ -24,13 +25,13 @@
     "hono": "^4.13.0",
     "ical.js": "^2.2.1",
     "qrcode": "^1.5.4",
+    "tsx": "^4.19.0",
     "zod": "^4.6.0"
   },
   "devDependencies": {
     "@types/heic-convert": "^2.1.1",
     "@types/node": "^22.0.0",
     "@types/qrcode": "^1.5.6",
-    "tsx": "^4.19.0",
     "typescript": "^5.6.0"
   }
 }

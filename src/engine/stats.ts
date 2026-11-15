@@ -30,11 +30,10 @@ export function trailingMisses(statuses: string[]): number {
 
 export function friendHelp(store: Store, habitId: string) {
   const events = store.friendEvents(habitId);
-  const by = new Map<string, { nudges: number; replies: number }>();
+  const by = new Map<string, { nudges: number }>();
   for (const e of events) {
-    const r = by.get(e.friend_id) ?? { nudges: 0, replies: 0 };
+    const r = by.get(e.friend_id) ?? { nudges: 0 };
     if (e.kind === "nudge") r.nudges++;
-    if (e.kind === "support_reply") r.replies++;
     by.set(e.friend_id, r);
   }
   return by;

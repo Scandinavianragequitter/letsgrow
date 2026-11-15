@@ -7,12 +7,12 @@ export const msg = {
   userStarted: (title: string, days: number) =>
     `"${title}" starts today. ${days} days. Send your friend the link from the app so someone has your back.`,
 
-  friendNudge: (friend: string, user: string, title: string, misses: number, i: number) => {
+  friendNudge: (friend: string, user: string, title: string, misses: number, i: number, textLink: string) => {
     const days = misses > 1 ? `${misses} days in a row` : "today";
     return pick([
-      `Hey ${friend}, ${user} missed their habit (${title}) ${days}. Could you send them a quick word of support? Just reply here and I'll pass it on.`,
-      `${friend}, small ask: ${user} slipped on "${title}" ${days}. A friendly nudge from you would help. Reply and I'll forward it.`,
-      `Quick one, ${friend}: ${user} is behind on "${title}" (${days}). Cheer them on? Reply here and I'll deliver it.`,
+      `Hey ${friend}, ${user} missed their habit (${title}) ${days}. Could you text them a quick word of support? ${textLink}`,
+      `${friend}, small ask: ${user} slipped on "${title}" ${days}. A message from you would help: ${textLink}`,
+      `Quick one, ${friend}: ${user} is behind on "${title}" (${days}). Cheer them on? ${textLink}`,
     ], i);
   },
 
@@ -22,10 +22,10 @@ export const msg = {
   userCongrats: (name: string, title: string, days: number, done: number, counted: number, longest: number, friendLine: string) =>
     `${days} days. You did it, ${name}! "${title}": ${done} of ${counted} days on target, longest streak ${longest}. ${friendLine} That's real personal growth. Proud of you.`,
 
-  friendCongrats: (friend: string, user: string, title: string | null, days: number, nudges: number, replies: number) => {
+  friendCongrats: (friend: string, user: string, title: string | null, days: number, nudges: number) => {
     const help = nudges === 0
       ? `${user} never needed a nudge, but knowing you were there helped.`
-      : `I asked you to step in ${nudges} time${nudges === 1 ? "" : "s"} and you replied ${replies} time${replies === 1 ? "" : "s"}.`;
+      : `I asked you to step in ${nudges} time${nudges === 1 ? "" : "s"}, and you were there.`;
     const what = title ? `${days} days of "${title}"` : `${days} days of their new habit`;
     return `${friend}, ${user} just finished ${what}! ${help} Part of that growth is yours. Thank you.`;
   },

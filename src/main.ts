@@ -13,13 +13,14 @@ import { ConsoleAssigner, PhotonAssigner, type LineAssigner } from "./messaging/
 import { createApp } from "./web/server.js";
 import { ConnectorHub } from "./integrations/hub.js";
 import { ConnectLinks } from "./engine/connect.js";
+import { LoginCodes } from "./engine/login.js";
 
 const store = new Store(config.dbPath);
 const clock = new Clock(config.timeScale);
 const now = () => clock.now();
 const mock = new MockIntegrations(store, config.mockAutofill);
 // Real data where a person connected a source (calendar link, Google, Apple Health), demo data otherwise.
-const integrations = new ConnectorHub({ store, mock, google: config.google, now: () => Date.now() });
+const integrations = new ConnectorHub({ store, mock, google: config.google, now: () => Date.now(), demoData: config.mockAutofill });
 const links = new ConnectLinks({ store, publicBaseUrl: config.publicBaseUrl, googleRedirectUri: config.google?.redirectUri, now: () => Date.now() });
 const llm = createLlm(config.llm);
 
@@ -40,8 +41,13 @@ if (config.messenger === "photon") {
 const actions = new HabitActions({ store, durationDays: config.durationDays, publicBaseUrl: config.publicBaseUrl, now });
 const agent = new LetsGrowAgent({ store, llm, integrations, actions, messenger: transport, now, hub: integrations, links });
 const messenger = agent.messenger; // records every text in the person's thread
-const scheduler = new Scheduler({ store, integrations, messenger, publicBaseUrl: config.publicBaseUrl, write: (r) => agent.write(r) });
-await messenger.start((e) => agent.onInbound(e));
+const scheduler = new Scheduler({ store, integrations, messenger, publicBaseUrl: config.publicBaseUrl, write: (r) => agent.write(r), matchEvents: agent.matchEvents });
+// Live site (real iMessage): signing in on the website = texting your code to the agent.
+const login = config.messenger === "photon" ? new LoginCodes({ store, now: () => Date.now() }) : undefined;
+await messenger.start((e) => {
+  const signedIn = !!login && e.kind === "text" && login.verifyFromText(e.handle, e.text ?? "");
+  return agent.onInbound(e, signedIn ? ["They just signed in on the website by texting this code. Welcome them in one or two sentences; if they have no habit yet, ask what they want to build."] : []);
+});
 
 const devPanel = config.messenger === "console" || process.env.DEV_PANEL === "1";
 const consoleTransport = transport instanceof ConsoleMessenger ? transport : undefined;
@@ -51,11 +57,13 @@ const connect = {
   onConnected: async (userId: string, what: string) => {
     const user = store.getUser(userId);
     if (!user || (messenger.mode === "photon" && !user.connected)) return;
-    const text = await agent.write({ to: user.name, purpose: `They just connected ${what}. Confirm in one short sentence and say what you'll use it for.`, facts: { connected: what }, fallback: `${what} connected. Thanks!` });
-    try { await messenger.send(user.phone, text); } catch { /* not reachable */ }
+    // The coach takes a real turn: it can look at the new data right away and continue where you left off.
+    try {
+      await agent.onEvent(user, `They just connected ${what}. Look at it now with your tools and continue the conversation from there: say in a sentence what you found that matters for their habit, then take the next step (e.g. propose or adjust the plan). Don't just confirm the connection.`);
+    } catch (err) { console.warn("follow-up after connect failed:", (err as Error).message); }
   },
 };
-const app = createApp({ store, clock, agent, actions, scheduler, messenger, assigner, devPanel, consoleTransport, connect });
+const app = createApp({ store, clock, agent, actions, scheduler, messenger, assigner, devPanel, consoleTransport, connect, login });
 void integrations.syncAll();
 setInterval(() => { void integrations.syncAll(); }, config.syncMinutes * 60_000);
 

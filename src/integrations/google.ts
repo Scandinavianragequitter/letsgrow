@@ -1,4 +1,4 @@
-import type { CalEvent } from "./mock.js";
+import { allDayMs, type CalEvent } from "./mock.js";
 
 // Google sign-in (OAuth 2.0, web server flow) plus the two read-only APIs we use.
 // Plain fetch, no Google SDK: three endpoints are all we need.
@@ -59,7 +59,7 @@ async function api(token: string, url: string, fetchImpl: typeof fetch): Promise
   return json;
 }
 
-/** Timed events from all the user's selected calendars in [fromMs, toMs). All-day events are skipped. */
+/** Events from all the user's selected calendars in [fromMs, toMs). All-day events are kept and flagged. */
 export async function calendarEvents(token: string, fromMs: number, toMs: number, fetchImpl: typeof fetch = fetch): Promise<CalEvent[]> {
   const list = await api(token, "https://www.googleapis.com/calendar/v3/users/me/calendarList?minAccessRole=reader", fetchImpl);
   const cals = (list.items ?? []).filter((c: any) => c.selected !== false && !c.hidden);
@@ -68,7 +68,14 @@ export async function calendarEvents(token: string, fromMs: number, toMs: number
     const q = new URLSearchParams({ timeMin: new Date(fromMs).toISOString(), timeMax: new Date(toMs).toISOString(), singleEvents: "true", orderBy: "startTime", maxResults: "250" });
     const ev = await api(token, `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(c.id)}/events?${q}`, fetchImpl);
     for (const e of ev.items ?? []) {
-      if (e.status === "cancelled" || !e.start?.dateTime || !e.end?.dateTime) continue;
+      if (e.status === "cancelled") continue;
+      if (e.start?.date) {
+        const [y, m, d] = String(e.start.date).split("-").map(Number);
+        const ms = allDayMs(y, m, d);
+        out.push({ title: e.summary ?? "(untitled)", startMs: ms, endMs: ms, allDay: true });
+        continue;
+      }
+      if (!e.start?.dateTime || !e.end?.dateTime) continue;
       out.push({ title: e.summary ?? "(untitled)", startMs: Date.parse(e.start.dateTime), endMs: Date.parse(e.end.dateTime) });
     }
   }

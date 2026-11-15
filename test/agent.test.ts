@@ -89,24 +89,24 @@ test("logging: a German tapback reaches the model verbatim with the waiting remi
   assert.equal(s.out(USER_PHONE).length, 1, "an empty reply sends nothing (only the reminder was sent)");
 });
 
-test("friends: first text activates them, support is relayed to the user through the tool", async () => {
-  const llm = model((c, last) => {
+test("friends: first text activates them; support isn't passed on, they're pointed to text the person directly", async () => {
+  let friendSystem = "";
+  const llm = model((c) => {
     if (/just joined/.test(c.system)) return { text: "Hi Anna! I'll only text you if Carl slips.", toolCalls: [] };
-    if (last === "Go Carl!" && toolResults(c) === 0) return call("relay_to_user", { message: "Anna says: Go Carl!" });
-    return { text: "Passed it on, thank you!", toolCalls: [] };
+    friendSystem = c.system;
+    return { text: "Thank you! Send that straight to Carl, it means more from you.", toolCalls: [] };
   });
   const s = setup(true, llm);
   const start = zonedTime(MON, "09:00", TZ);
   s.setNow(start);
   const habit = startHabit(s, stretchPlan, start);
-  const f = s.store.addFriend(habit.id, "Anna", FRIEND_PHONE, "+16289988199", start);
+  s.store.addFriend(habit.id, "Anna", FRIEND_PHONE, "+16289988199", start);
   await s.transport.simulateInbound({ handle: FRIEND_PHONE, kind: "text", text: "ping" });
   assert.equal(s.store.friends(habit.id)[0].state, "active");
   assert.match(s.out(FRIEND_PHONE)[0], /Hi Anna/);
   await s.transport.simulateInbound({ handle: FRIEND_PHONE, kind: "text", text: "Go Carl!" });
-  assert.deepEqual(s.out(USER_PHONE), ["Anna says: Go Carl!"]);
-  assert.equal(s.store.friendEvents(habit.id).filter((e) => e.friend_id === f.id && e.kind === "support_reply").length, 1);
-  assert.ok(s.store.chat(s.user.id).some((m) => m.content === "Anna says: Go Carl!"), "relayed text is in Carl's thread too");
+  assert.deepEqual(s.out(USER_PHONE), [], "nothing reaches Carl through the agent");
+  assert.match(friendSystem, new RegExp(`sms:\\${USER_PHONE}`), "the friend's agent knows how to point them to Carl");
 });
 
 test("write() falls back to the given text when the model is unavailable", async () => {

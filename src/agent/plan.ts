@@ -4,8 +4,15 @@ const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "use HH:MM, 24h");
 
 export const ReminderSchema = z.object({
   anchor: z.enum(["calendar_event", "fixed_time"]),
-  /** Case-insensitive substring of a calendar event title, e.g. "training". */
+  /**
+   * Which calendar events this reminder is for, in plain words, e.g. "any workout or training session
+   * (runs, rides, swims, strength, brick)". Each day the model reads the day's events and decides which fit.
+   */
+  eventMatch: z.string().min(3).max(200).optional(),
+  /** Older plans: case-insensitive substring of the event title. Prefer eventMatch. */
   eventKeyword: z.string().min(1).max(60).optional(),
+  /** All-day events have no time to count from: remind at this local time on that day instead. */
+  allDayTime: hhmm.optional(),
   /** Which edge of the matching calendar event the offset is measured from. */
   edge: z.enum(["start", "end"]).optional(),
   /** Minutes relative to the edge. Negative = before. */
@@ -54,8 +61,8 @@ export const HabitPlanSchema = z
       ctx.addIssue({ code: "custom", message: "mode=prompted requires the prompted block" });
     }
     for (const r of p.prompted?.reminders ?? []) {
-      if (r.anchor === "calendar_event" && (!r.eventKeyword || !r.edge || r.offsetMinutes === undefined)) {
-        ctx.addIssue({ code: "custom", message: "calendar_event reminders need eventKeyword, edge and offsetMinutes" });
+      if (r.anchor === "calendar_event" && (!(r.eventMatch || r.eventKeyword) || !r.edge || r.offsetMinutes === undefined)) {
+        ctx.addIssue({ code: "custom", message: "calendar_event reminders need eventMatch, edge and offsetMinutes" });
       }
       if (r.anchor === "fixed_time" && !r.time) {
         ctx.addIssue({ code: "custom", message: "fixed_time reminders need time" });

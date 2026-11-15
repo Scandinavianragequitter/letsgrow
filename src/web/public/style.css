@@ -55,3 +55,6 @@ details.dev summary{cursor:pointer;color:var(--mute);font-weight:600}
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #d2d2d7; margin-right: 10px; vertical-align: middle; }
 .dot.on { background: #34c759; }
 .outimg { display:block; max-width: 220px; border-radius: 12px; margin: 6px 0; }
+.codecard { text-align: center; padding: 28px; }
+.codecard .code { font: 600 56px/1 ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: .18em; margin: 4px 0 20px; }
+.small { font-size: 13px; margin-top: 10px; }

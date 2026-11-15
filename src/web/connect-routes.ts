@@ -52,7 +52,7 @@ export function registerConnectRoutes(app: Hono, d: ConnectDeps) {
       await d.hub.completeGoogle(userId, c.req.query("code") ?? "");
       const s = d.hub.status(userId);
       const what = [s.google_calendar && "Google Calendar", s.gmail && "Gmail"].filter(Boolean).join(" and ") || "Google";
-      await d.onConnected?.(userId, what);
+      void Promise.resolve(d.onConnected?.(userId, what)).catch(() => {});
       return c.html(done(what));
     } catch (err) {
       return c.html(page("Not connected", `<h1>That didn't work.</h1><p class="mute">${esc((err as Error).message)}</p>`), 502);
@@ -76,7 +76,7 @@ export function registerConnectRoutes(app: Hono, d: ConnectDeps) {
     const form = await c.req.parseBody();
     try {
       await d.hub.connectCalendarLink(userId, String(form.url ?? ""));
-      await d.onConnected?.(userId, "Your calendar");
+      void Promise.resolve(d.onConnected?.(userId, "Your calendar")).catch(() => {});
       return c.html(done("Calendar"));
     } catch (err) {
       return c.html(page("Not connected", `<h1>That link didn't work.</h1><p class="mute">${esc((err as Error).message)}</p>`), 400);
@@ -109,7 +109,7 @@ ${shortcut ? `<div class="card"><p>1. Add the Shortcut:</p><a class="btn" href="
       for (const day of days) for (const [k, v] of Object.entries(day.values)) d.store.setSignal(userId, day.day, k, v);
       const conn = d.store.getConnection<{ token: string; lastPushAt?: number }>(userId, "health")!;
       d.store.setConnection(userId, "health", { ...conn, lastPushAt: d.now() }, d.now());
-      if (!conn.lastPushAt) await d.onConnected?.(userId, "Apple Health");
+      if (!conn.lastPushAt) void Promise.resolve(d.onConnected?.(userId, "Apple Health")).catch(() => {});
       return c.json({ ok: true, days: days.map((x) => ({ day: x.day, values: x.values })) });
     } catch (err) {
       return c.json({ error: (err as Error).message }, 400);

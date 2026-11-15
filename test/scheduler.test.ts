@@ -137,14 +137,13 @@ test("60 days resolves with a congrats to the user and a thank-you to the friend
   const start = zonedTime(MON, "09:00", TZ);
   s.setNow(start);
   const habit = startHabit(s, instagramPlan, start, "immediate", 60);
-  const friend = await addActiveFriend(s, habit.id, start);
+  await addActiveFriend(s, habit.id, start);
   let day = MON;
   for (let i = 0; i < 60; i++) {
     // misses on days 10 and 11, otherwise on target
     s.store.setSignal(s.user.id, day, "app_minutes:Instagram", i === 10 || i === 11 ? 120 : 40);
     await s.scheduler.tick(zonedTime(day, "22:05", TZ));
     await s.scheduler.tick(zonedTime(day, "23:59", TZ));
-    if (i === 10) s.store.addFriendEvent(habit.id, friend.id, "support_reply", null, "You got this!", s.store.getHabit(habit.id)!.created_at);
     day = addDays(day, 1);
   }
   await s.scheduler.tick(zonedTime(day, "08:00", TZ));
@@ -158,7 +157,7 @@ test("60 days resolves with a congrats to the user and a thank-you to the friend
   assert.match(congrats!, /58 of 60 days on target/);
   assert.match(congrats!, /Anna stepped in \d+ time/);
   const friendMsgs = s.out(FRIEND_PHONE);
-  assert.ok(friendMsgs.some((m) => m.includes("just finished 60 days") && m.includes("replied 1 time")));
+  assert.ok(friendMsgs.some((m) => m.includes("just finished 60 days") && m.includes("you were there")));
 });
 
 test("proactive messages are written by the agent when a model is available", async () => {
@@ -200,4 +199,60 @@ test("a friend who was never needed doesn't learn the habit, even at the end", a
   assert.equal(final.length, 1);
   assert.match(final[0], /just finished 3 days of their new habit/);
   assert.ok(!final[0].includes(instagramPlan.title));
+});
+
+test("presenter slip: misses as many days as the policy needs, texts the friend now, and undo clears it", async () => {
+  const s = setup();
+  const start = zonedTime(MON, "08:00", TZ);
+  s.setNow(start);
+  const habit = startHabit(s, stretchPlan, start, "two_in_a_row");
+  await addActiveFriend(s, habit.id, start);
+  await s.scheduler.tick(start);
+
+  const r = await s.scheduler.simulateSlip(habit.id, start);
+  assert.equal(r.missedDays.length, 2);
+  assert.equal(r.friendsTexted, 1);
+  assert.equal(s.out(FRIEND_PHONE).length, 1, "friend texted right away, no waiting for the grace delay");
+  assert.ok(s.out(FRIEND_PHONE)[0].includes(`sms:${USER_PHONE}`), "one tap to text Carl directly");
+  assert.equal(s.out(USER_PHONE).filter((m) => m.startsWith("Stretch")).length, 0, "no reminders spammed");
+
+  s.store.clearSimulatedDays(habit.id);
+  assert.equal(s.store.days(habit.id).filter((d) => d.status === "missed").length, 0);
+});
+
+test("calendar reminders: the model picks the events (all-day ones too), and today re-plans when the calendar changes", async () => {
+  const s = setup(false);
+  const start = zonedTime(MON, "06:00", TZ);
+  s.setNow(start);
+  const noon = (d: string) => Date.parse(`${d}T12:00:00Z`);
+  let events = [
+    { title: "Strength Training", startMs: zonedTime(MON, "09:00", TZ), endMs: zonedTime(MON, "10:00", TZ) },
+    { title: "Long Run", startMs: noon(MON), endMs: noon(MON), allDay: true },
+    { title: "Flight to Chicago", startMs: zonedTime(MON, "15:00", TZ), endMs: zonedTime(MON, "17:00", TZ) },
+  ];
+  const asked: string[][] = [];
+  // Stands in for the model: judges by meaning, not by a shared word.
+  const matchEvents = async (_desc: string, evs: typeof events) => {
+    asked.push(evs.map((e) => e.title));
+    return evs.flatMap((e, i) => (/run|ride|swim|strength|brick/i.test(e.title) ? [i] : []));
+  };
+  const integrations = Object.assign(Object.create(s.integrations), { events: () => events });
+  const scheduler = new Scheduler({ store: s.store, integrations, messenger: s.messenger, publicBaseUrl: "http://x", matchEvents });
+  const plan = { ...stretchPlan, prompted: { ...stretchPlan.prompted!, reminders: [
+    { anchor: "calendar_event" as const, eventMatch: "any workout or training session", edge: "start" as const, offsetMinutes: -15, allDayTime: "07:30", text: "Stretch first. Reply ❤️ when done." },
+    { anchor: "calendar_event" as const, eventMatch: "strength sessions", edge: "start" as const, offsetMinutes: -15, text: "Stretch first. Reply ❤️ when done." },
+  ] } };
+  const habit = startHabit(s, plan, start);
+
+  await scheduler.tick(start);
+  const dues = () => s.store.remindersForDay(habit.id, MON).map((r) => r.due_at).sort();
+  assert.deepEqual(dues(), [zonedTime(MON, "07:30", TZ), zonedTime(MON, "08:45", TZ)], "all-day Long Run at 07:30; strength once even though two rules fit; no flight");
+
+  await scheduler.tick(start + 5_000);
+  assert.equal(asked.length, 2, "no new model call while the calendar is unchanged (one per rule on the first plan)");
+
+  // A ride is added for the evening, the strength session is cancelled.
+  events = [events[1], events[2], { title: "Group Ride", startMs: zonedTime(MON, "18:00", TZ), endMs: zonedTime(MON, "19:00", TZ) }];
+  await scheduler.tick(start + 10 * MIN);
+  assert.deepEqual(dues(), [zonedTime(MON, "07:30", TZ), zonedTime(MON, "17:45", TZ)]);
 });

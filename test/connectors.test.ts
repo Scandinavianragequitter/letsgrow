@@ -187,3 +187,31 @@ test("agent: a calendar link sent in iMessage gets connected, and it can hand ou
   assert.match(results[1].link, /^https:\/\/demo\.example\/connect\/health\?t=/);
   assert.match(llm.calls.at(-1)!.system, /"apple_calendar": true/, "the agent now sees the calendar as connected");
 });
+
+test("live site: unconnected sources have no data at all, so nothing is ever checked against demo numbers", async () => {
+  const store = new Store(":memory:");
+  const hub = new ConnectorHub({ store, mock: new MockIntegrations(store, false), now: () => NOW, demoData: false });
+  const user = store.createUser("Carl", "+15404492120", TZ, 0);
+  assert.equal(hub.metric(user.id, "screen_time", "app_minutes:Instagram", "2026-11-15"), null);
+  assert.equal(hub.metric(user.id, "health", "steps", "2026-11-15"), null);
+  assert.deepEqual(hub.events(user.id, "2026-11-16", TZ), []);
+  assert.equal(hub.catalog(user.id)[0].connected, false);
+  assert.match(hub.catalog(user.id)[0].notes, /can't be read from a server/);
+  assert.equal((await hub.probe(user.id, TZ, "2026-11-16", { source: "health" }) as any).data, "none");
+});
+
+test("calendar feeds keep all-day events (e.g. a Saturday long run), flagged and on the right date", async () => {
+  const { eventsInWindow } = await import("../src/integrations/ics.js");
+  const ics = [
+    "BEGIN:VCALENDAR", "VERSION:2.0",
+    "BEGIN:VEVENT", "UID:a", "SUMMARY:Long Run", "DTSTART;VALUE=DATE:20261121", "DTEND;VALUE=DATE:20261122", "RRULE:FREQ=WEEKLY;COUNT=3", "END:VEVENT",
+    "BEGIN:VEVENT", "UID:b", "SUMMARY:Strength Training", "DTSTART:20261123T113000Z", "DTEND:20261123T123000Z", "END:VEVENT",
+    "END:VCALENDAR",
+  ].join("\r\n");
+  const evs = eventsInWindow(ics, Date.parse("2026-11-20T00:00:00Z"), Date.parse("2026-12-01T00:00:00Z"));
+  assert.deepEqual(evs.map((e) => [e.title, new Date(e.startMs).toISOString().slice(0, 10), !!e.allDay]), [
+    ["Long Run", "2026-11-21", true],
+    ["Strength Training", "2026-11-23", false],
+    ["Long Run", "2026-11-28", true],
+  ]);
+});

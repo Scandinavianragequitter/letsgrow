@@ -1,0 +1,42 @@
+# One web service on Render with a persistent disk for the SQLite database.
+# Secrets (API keys) are set in the Render dashboard, never in this file.
+services:
+  - type: web
+    name: letsgrow
+    runtime: node
+    plan: starter            # persistent disks need a paid instance
+    region: oregon
+    buildCommand: npm ci
+    startCommand: npm run serve
+    healthCheckPath: /healthz
+    disk:
+      name: data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: "22.13.0"
+      - key: DB_PATH
+        value: /var/data/letsgrow.db
+      - key: MESSENGER
+        value: photon
+      - key: MOCK_AUTOFILL
+        value: "0"
+      - key: DEV_PANEL
+        value: "0"
+      - key: PUBLIC_BASE_URL
+        sync: false          # e.g. https://letsgrow.onrender.com or your domain
+      - key: GOOGLE_REDIRECT_URI
+        sync: false          # <PUBLIC_BASE_URL>/oauth/google/callback
+      - key: PHOTON_PROJECT_ID
+        sync: false
+      - key: PHOTON_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: PRESENTER_KEY
+        sync: false          # any secret word; opens /presenter?key=<it>

@@ -1,5 +1,5 @@
 import ICAL from "ical.js";
-import type { CalEvent } from "./mock.js";
+import { allDayMs, type CalEvent } from "./mock.js";
 
 // Read a published calendar (Apple "Public Calendar" link, or any .ics URL) and expand repeating
 // events into concrete occurrences. Apple shares these as webcal://, which is plain HTTPS.
@@ -18,7 +18,7 @@ export async function fetchIcs(url: string, fetchImpl: typeof fetch = fetch): Pr
   return text;
 }
 
-/** Events (title, start, end) overlapping [fromMs, toMs), recurrences expanded, all-day events skipped. */
+/** Events (title, start, end) overlapping [fromMs, toMs), recurrences expanded. All-day events are kept and flagged. */
 export function eventsInWindow(icsText: string, fromMs: number, toMs: number): CalEvent[] {
   const root = new ICAL.Component(ICAL.parse(icsText));
   for (const tz of root.getAllSubcomponents("vtimezone")) ICAL.TimezoneService.register(tz);
@@ -35,19 +35,22 @@ export function eventsInWindow(icsText: string, fromMs: number, toMs: number): C
   }
   for (const e of masters) {
     for (const ex of overrides.get(e.uid) ?? []) e.relateException(ex);
-    if (e.startDate?.isDate) continue; // all-day
     const title = e.summary || "(untitled)";
-    if (!e.isRecurring()) {
-      const s = e.startDate.toJSDate().getTime(), en = (e.endDate ?? e.startDate).toJSDate().getTime();
-      if (s < toMs && en > fromMs) out.push({ title, startMs: s, endMs: en });
-      continue;
-    }
+    const push = (t: string, start: ICAL.Time, end: ICAL.Time | null) => {
+      if (start.isDate) {
+        const ms = allDayMs(start.year, start.month, start.day);
+        if (ms >= fromMs && ms < toMs) out.push({ title: t, startMs: ms, endMs: ms, allDay: true });
+        return ms;
+      }
+      const s = start.toJSDate().getTime(), en = (end ?? start).toJSDate().getTime();
+      if (s < toMs && en > fromMs) out.push({ title: t, startMs: s, endMs: en });
+      return s;
+    };
+    if (!e.isRecurring()) { push(title, e.startDate, e.endDate); continue; }
     const it = e.iterator();
     for (let next = it.next(), guard = 0; next && guard < 2000; next = it.next(), guard++) {
       const occ = e.getOccurrenceDetails(next);
-      const s = occ.startDate.toJSDate().getTime(), en = occ.endDate.toJSDate().getTime();
-      if (s >= toMs) break;
-      if (en > fromMs) out.push({ title: occ.item.summary || title, startMs: s, endMs: en });
+      if (push(occ.item.summary || title, occ.startDate, occ.endDate) >= toMs) break;
     }
   }
   return out.sort((a, b) => a.startMs - b.startMs);

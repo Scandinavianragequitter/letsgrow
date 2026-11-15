@@ -13,6 +13,7 @@ import type { ConnectorHub } from "../integrations/hub.js";
 import type { ConnectLinks } from "../engine/connect.js";
 import { GmailVerifier } from "./gmail-verifier.js";
 import { WebResearcher, personalDetailsIn } from "./researcher.js";
+import { llmMatcher, type MatchEvents } from "./event-matcher.js";
 
 // The Let'sGrow agent. Every message from a person (website chat or iMessage) goes through one
 // tool-using model call with the full situation in context. The code does not try to interpret
@@ -43,8 +44,11 @@ export class LetsGrowAgent {
   readonly messenger: Messenger;
   private gmailVerifier?: GmailVerifier;
   private researcher: WebResearcher;
+  /** Which calendar events a reminder is for (the same judgement the scheduler uses each day). */
+  readonly matchEvents: MatchEvents;
 
   constructor(private d: AgentDeps) {
+    this.matchEvents = llmMatcher(d.llm);
     if (d.hub) this.gmailVerifier = new GmailVerifier({ llm: d.llm, hub: d.hub });
     this.researcher = new WebResearcher({ llm: d.llm });
     const self = this;
@@ -70,7 +74,7 @@ export class LetsGrowAgent {
   // ---------- entry points ----------
 
   /** A text (or tapback, or attachment) arrived on iMessage. */
-  async onInbound(e: InboundEvent): Promise<void> {
+  async onInbound(e: InboundEvent, extraEvents: string[] = []): Promise<void> {
     const { store, now } = this.d;
     const party = this.resolve(e.handle);
     const images = e.kind === "image" ? (e.images ?? []) : [];
@@ -78,7 +82,7 @@ export class LetsGrowAgent {
       : e.kind === "reaction" ? `[tapback ${e.emoji}]`
       : e.kind === "image" ? (images.length ? `[sent ${images.length > 1 ? `${images.length} photos` : "a photo"}]${e.text ? ` ${e.text}` : ""}` : `[sent a photo that couldn't be opened]${e.text ? ` ${e.text}` : ""}`)
       : "[sent an attachment]";
-    const events: string[] = [];
+    const events: string[] = [...extraEvents];
 
     // Facts, not interpretation: the first text from a person is what connects them.
     if (party.kind === "user" && !party.user.connected) {
@@ -102,6 +106,21 @@ export class LetsGrowAgent {
     }
   }
 
+  /**
+   * Something happened that the user didn't text about (e.g. they just connected a data source).
+   * The coach takes a full turn with its tools, so it can look at the new data and carry the plan forward.
+   */
+  async onEvent(user: UserRow, event: string): Promise<void> {
+    const fresh = this.d.store.getUser(user.id) ?? user;
+    await this.d.messenger.typing?.(fresh.phone, true);
+    try {
+      const reply = await this.respond({ kind: "user", user: fresh }, "[no new text from them; act on what just happened]", "imessage", [event], [], false);
+      if (reply) await this.messenger.send(fresh.phone, reply);
+    } finally {
+      await this.d.messenger.typing?.(fresh.phone, false);
+    }
+  }
+
   /** The website chat. Same agent, same thread as iMessage. */
   async chat(user: UserRow, text: string): Promise<string> {
     const reply = await this.respond({ kind: "user", user }, text, "web", []);
@@ -116,7 +135,7 @@ export class LetsGrowAgent {
   async write(req: { to: string; purpose: string; facts: Record<string, unknown>; fallback: string }): Promise<string> {
     try {
       const out = await this.d.llm.complete({
-        system: `${VOICE}\nWrite exactly one iMessage to ${req.to}. Purpose: ${req.purpose}\nUse only these facts:\n${JSON.stringify(req.facts, null, 2)}\nOutput only the message text.`,
+        system: `${VOICE}\nWrite exactly one short iMessage to ${req.to}: one or two sentences, under 30 words plus any link. Purpose: ${req.purpose}\nUse only these facts:\n${JSON.stringify(req.facts, null, 2)}\nOutput only the message text.`,
         messages: [{ role: "user", content: "Write the message." }],
         maxTokens: 400,
       });
@@ -130,10 +149,10 @@ export class LetsGrowAgent {
 
   // ---------- core ----------
 
-  private async respond(party: Party, text: string, channel: "web" | "imessage", events: string[], images: ImagePart[] = []): Promise<string> {
+  private async respond(party: Party, text: string, channel: "web" | "imessage", events: string[], images: ImagePart[] = [], record = true): Promise<string> {
     const { store, llm, now } = this.d;
     const transcript = party.kind === "unknown" ? "" : this.transcript(partyId(party));
-    if (party.kind !== "unknown") store.addChat(partyId(party), "user", text, now(), channel);
+    if (party.kind !== "unknown" && record) store.addChat(partyId(party), "user", text, now(), channel);
 
     const { system, tools } =
       party.kind === "user" ? this.userTurn(party.user, channel)
@@ -208,11 +227,13 @@ export class LetsGrowAgent {
         name: "propose_plan",
         description: "Save how this habit will be verified (replaces any earlier proposal). Only possible while no habit is running. The plan is checked against the user's real data; fix it if an error comes back.",
         input: z.object({ plan: HabitPlanSchema, habit_in_their_words: z.string().min(2).max(200) }),
-        run: (i: { plan: HabitPlan; habit_in_their_words: string }) => {
-          const problem = this.groundingProblem(user, today, i.plan);
-          if (problem) return { error: problem };
+        run: async (i: { plan: HabitPlan; habit_in_their_words: string }) => {
+          const problem = await this.groundingProblem(user, today, i.plan);
+          if (typeof problem === "string") return { error: problem };
           const h = actions.savePlan(fresh(), i.plan, i.habit_in_their_words);
-          return { saved: true, title: i.plan.title, status: h.status, friendNudgeAfterMissedDays: i.plan.suggestedMissedDaysBeforeFriendNudge, next: "Explain it in 1-3 sentences and ask if they want to start." };
+          return { saved: true, title: i.plan.title, status: h.status, friendNudgeAfterMissedDays: i.plan.suggestedMissedDaysBeforeFriendNudge,
+            ...(problem ? { remindersNextWeek: problem.reminded, notReminded: problem.notReminded } : {}),
+            next: "Explain it in 1-3 sentences and ask if they want to start. If something they'd expect isn't reminded, say so." };
         },
       },
       {
@@ -256,12 +277,13 @@ ${user.name} picks one healthy habit. You work out how to verify it with the lea
 ## How to plan a habit
 1. Find out what data actually exists: list_data_sources, then probe_data_source for the relevant source(s). Do not assume.
 2. If a connected source can measure the habit directly, verify it autonomously: no effort for them at all. Prefer this.
-3. Otherwise plan prompted check-ins with the least burden: anchor reminders to their real calendar events when there are any (check with probe_data_source calendar + keyword), otherwise a fixed time. Confirmation should be one tap: reacting to the reminder (iPhone tapback, e.g. ❤️) or a one-word reply.
+3. Otherwise plan prompted check-ins with the least burden: anchor reminders to their real calendar events when there are any (probe_data_source calendar first), otherwise a fixed time. For calendar reminders, set eventMatch to a plain description of which events count (e.g. "any workout or training session: runs, rides, swims, strength, brick"), not a single title word: each day the events are read with judgement, so a "Long Run" counts as a workout. All-day events count too; set allDayTime for when to remind on those days. propose_plan tells you which upcoming events will get a reminder; mention anything that won't. Any reply to a reminder counts as done. Don't explain how to confirm, in the plan summary or in reminder texts: people know how to answer a text. A reminder just says the thing ("Swim in 15. Stretch first.").
 4. Pick a sensible threshold/timing yourself. Ask at most one short question, and only if you truly cannot choose.
 5. propose_plan, then tell them in 1-3 short sentences how you'll verify it and what they have to do, and ask if they want to start. When they agree in any words, call start_habit and give them the invite message to forward to a friend.
 
 ## While a habit is running
 - When they say or show they did it (any wording, emoji, or tapback on your reminder), call log_completion. iPhones forward tapbacks as text such as: Loved “…”, Reacted ❤️ to “…”, or in German „…“ ein Herz hinzugefügt. Treat those as a reaction to the quoted message. The phone writes that text in its own language, so it says nothing about which language to reply in: keep the language of the conversation.
+- If nothing connected can measure the habit, plan a low-effort check-in (a reminder they answer with any reply or a photo). Never plan around a source that has no data.
 - Photos count as proof when they clearly show the habit (a rowing monitor with meters and time, a book page, a stretch mat after training). Look at what the photo shows, call log_completion if it fits a waiting reminder, and say what you saw in a few words ("4,200 m in 18 min, counted"). If it doesn't show the habit, say so kindly.
 - If they want friends told sooner or later, use set_friend_nudge_threshold.
 - Answer questions about progress from the state below. Never claim you did something unless a tool call succeeded.
@@ -336,7 +358,7 @@ ${JSON.stringify(this.userState(user), null, 2)}`;
   }
 
   /** Check a proposed plan against the user's actual data (grounding, not interpretation). */
-  private groundingProblem(user: UserRow, today: string, plan: HabitPlan): string | undefined {
+  private async groundingProblem(user: UserRow, today: string, plan: HabitPlan): Promise<string | { reminded: string[]; notReminded: string[] } | undefined> {
     const { integrations } = this.d;
     if (plan.mode === "autonomous" && plan.autonomous) {
       const a = plan.autonomous;
@@ -349,6 +371,14 @@ ${JSON.stringify(this.userState(user), null, 2)}`;
       if (values.every((v) => v === null)) return `No ${a.source} data for metric "${a.metric}" in the last 7 days. Probe the source to see which metrics exist.`;
     }
     for (const r of plan.prompted?.reminders ?? []) {
+      if (r.anchor === "calendar_event" && r.eventMatch) {
+        // One look at the coming week, with the same judgement the scheduler uses each day.
+        const evs = Array.from({ length: 7 }, (_, i) => addDays(today, i)).flatMap((d) => integrations.events(user.id, d, user.tz));
+        const picked = new Set(await this.matchEvents(r.eventMatch, evs, user.tz));
+        if (picked.size === 0) return `No calendar events in the next 7 days fit "${r.eventMatch}". Probe the calendar and describe the events that are there, or use a fixed_time reminder.`;
+        const label = (e: (typeof evs)[number]) => `${e.title} (${e.allDay ? dayKey(e.startMs, user.tz) + ", all day" : this.fmt(e.startMs, user.tz)})`;
+        return { reminded: evs.filter((_, i) => picked.has(i)).map(label).slice(0, 20), notReminded: [...new Set(evs.filter((_, i) => !picked.has(i)).map((e) => e.title))].slice(0, 20) };
+      }
       if (r.anchor !== "calendar_event" || !r.eventKeyword) continue;
       const kw = r.eventKeyword.toLowerCase();
       const hits = Array.from({ length: 14 }, (_, i) => addDays(today, i))
@@ -398,27 +428,16 @@ ${JSON.stringify(this.userState(user), null, 2)}`;
     const { store, now } = this.d;
     const { friend, habit, owner } = p;
     const plan = JSON.parse(habit.plan_json!) as HabitPlan;
-    const tools: Tool[] = [
-      {
-        name: "relay_to_user",
-        description: `Pass a message from ${friend.name} on to ${owner.name}. Use it when ${friend.name} sends support or anything meant for ${owner.name}. Keep their words; you may add "${friend.name} says:".`,
-        input: z.object({ message: z.string().min(1).max(600) }),
-        run: async (i: { message: string }) => {
-          store.addFriendEvent(habit.id, friend.id, "support_reply", null, i.message, now());
-          await this.messenger.send(owner.phone, i.message);
-          return { delivered: true };
-        },
-      },
-    ];
+    const tools: Tool[] = [];
     // The habit is private until the friend is needed: before the first nudge the agent isn't told
     // what it is, so it can't let it slip however the friend asks.
     const revealed = habitRevealedTo(store, habit, friend);
     const habitLine = revealed
       ? `for "${plan.title}"`
       : `for a habit ${owner.name} is keeping private unless they slip. You don't know which habit it is; if asked, say ${friend.name} will find out only if ${owner.name} needs a nudge`;
-    const help = friendHelp(store, habit.id).get(friend.id) ?? { nudges: 0, replies: 0 };
+    const help = friendHelp(store, habit.id).get(friend.id) ?? { nudges: 0 };
     const system = `${VOICE}
-You are ${owner.name}'s Let'sGrow agent, texting with ${friend.name} on iMessage. ${owner.name} asked ${friend.name} to be their accountability friend ${habitLine} (${habit.duration_days} days). You only text ${friend.name} when ${owner.name} slips, to ask for a short word of support, which you pass on. Keep it to a few short sentences.
+You are ${owner.name}'s Let'sGrow agent, texting with ${friend.name} on iMessage. ${owner.name} asked ${friend.name} to be their accountability friend ${habitLine} (${habit.duration_days} days). You only text ${friend.name} when ${owner.name} slips, to ask them to text ${owner.name} a short word of support directly. You don't pass messages on: if ${friend.name} writes support here, thank them and ask them to send it to ${owner.name} directly (sms:${owner.phone}). Keep it to a few short sentences.
 Local time: ${this.fmt(now(), owner.tz)}.
 
 ## State
@@ -427,13 +446,12 @@ ${JSON.stringify({
   stats: computeStats(store, habit),
   recentDays: store.days(habit.id).slice(-7).map((d) => ({ day: d.day, status: d.status })),
   timesYouAskedThisFriendForSupport: help.nudges,
-  timesTheyReplied: help.replies,
 }, null, 2)}`;
     return { system, tools };
   }
 }
 
-const VOICE = `You are Let'sGrow, a warm, brief accountability agent that helps people build one healthy habit with a friend's support. Write like a thoughtful friend texting: plain sentences, no markdown, no bullet lists, no lecturing. Reply in the language the person writes in.`;
+const VOICE = `You are Let'sGrow, a warm, brief accountability agent that helps people build one healthy habit with a friend's support. Write like a friend texting: usually one or two short sentences, never more than three. No markdown, no lists, no lecturing, no explaining things people already know (how to reply, what to write to a friend). Reply in the language the person writes in.`;
 
 /** A friend learns the habit once they've been asked to step in. */
 export function habitRevealedTo(store: Store, habit: HabitRow, friend: FriendRow): boolean {
@@ -442,7 +460,7 @@ export function habitRevealedTo(store: Store, habit: HabitRow, friend: FriendRow
 
 /**
  * Where an agent's reply may go. Fixed by code, not by the model: the coach answers only the user,
- * a friend's agent only that friend. The only cross-person path is relay_to_user (friend to user).
+ * a friend's agent only that friend. No agent passes messages between people; friends text the person directly.
  */
 export function replyTarget(p: Party, handle: string): string {
   if (p.kind === "user") return p.user.phone;

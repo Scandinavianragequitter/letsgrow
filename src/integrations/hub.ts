@@ -15,6 +15,8 @@ export interface HubDeps {
   google?: google.GoogleConfig;
   now: () => number;
   fetch?: typeof fetch;
+  /** Demo data for sources a person hasn't connected (local demo). Off on the live site: unconnected means no data. */
+  demoData?: boolean;
 }
 
 export class ConnectorHub implements Integrations {
@@ -51,22 +53,27 @@ export class ConnectorHub implements Integrations {
   events(userId: string, day: string, tz: string): CalEvent[] {
     if (!this.calendarConnected(userId)) return this.d.mock.events(userId, day, tz);
     const from = zonedTime(day, "00:00", tz), to = zonedTime(addDays(day, 1), "00:00", tz);
-    return this.d.store.syncedEvents(userId, from, to).map((e) => ({ title: e.title, startMs: e.start_ms, endMs: e.end_ms }));
+    return this.d.store.syncedEvents(userId, from, to).map((e) => ({ title: e.title, startMs: e.start_ms, endMs: e.end_ms, ...(e.all_day ? { allDay: true } : {}) }));
   }
 
   catalog(userId: string): SourceInfo[] {
     const s = this.status(userId);
     const cal = s.google_calendar || s.apple_calendar;
+    const demo = this.d.demoData !== false;
+    const until = demo ? "demo data until then" : "no data until then";
     return [
-      { source: "screen_time", connected: true, use: "measure", metrics: ["app_minutes:<AppName>", "total_minutes", "pickups"],
-        notes: "Demo data: there is no server API for Screen Time." },
+      demo
+        ? { source: "screen_time", connected: true, use: "measure", metrics: ["app_minutes:<AppName>", "total_minutes", "pickups"],
+            notes: "Demo data: there is no server API for Screen Time." }
+        : { source: "screen_time", connected: false, use: "measure",
+            notes: "Not available: Screen Time can't be read from a server. Use a daily check-in, or ask for a screenshot of their Screen Time as photo proof." },
       { source: "health", connected: s.apple_health, use: "measure",
         metrics: ["steps", "workout_minutes", "workout_minutes:<Type> e.g. workout_minutes:Rowing", "sleep_hours", "mindful_minutes"],
         notes: s.apple_health ? "Real Apple Health data, pushed daily from their iPhone." :
-          "Not connected yet (demo data until then). request_connection apple_health gives them a setup link (one-time, a few taps on the iPhone)." },
+          `Not connected yet (${until}). request_connection apple_health gives them a setup link (one-time, a few taps on the iPhone).` },
       { source: "calendar", connected: cal, use: "context",
         notes: cal ? `Real calendar (${[s.google_calendar && "Google", s.apple_calendar && "Apple public calendar"].filter(Boolean).join(" + ")}).` :
-          "Not connected (demo events until then). For Google: request_connection google_calendar (one click). For Apple: ask them to share a public calendar link with you in this chat, then connect_calendar_link." },
+          `Not connected (${until}). For Google: request_connection google_calendar (one click). For Apple: ask them to share a public calendar link with you in this chat, then connect_calendar_link.` },
       { source: "email", connected: s.gmail, use: "measure", metrics: ["<Gmail search query>, e.g. from:duolingo subject:streak"],
         notes: s.gmail ? "Real Gmail (read-only, metadata and snippets). Measures: number of matching emails that day." :
           s.google_configured ? "Not connected. request_connection gmail gives them a one-click link." : "Unavailable: Google sign-in is not configured on this server." },
@@ -79,7 +86,7 @@ export class ConnectorHub implements Integrations {
       const kw = req.keyword?.toLowerCase();
       const events = Array.from({ length: 14 }, (_, i) => addDays(today, i)).flatMap((d) => this.events(userId, d, tz))
         .filter((e) => !kw || e.title.toLowerCase().includes(kw))
-        .map((e) => ({ title: e.title, start: fmt(e.startMs, tz), end: fmt(e.endMs, tz) }));
+        .map((e) => e.allDay ? { title: e.title, allDay: true, day: dayKey(e.startMs, tz) } : { title: e.title, start: fmt(e.startMs, tz), end: fmt(e.endMs, tz) });
       return { source: "calendar", data: "real", keyword: req.keyword ?? null, count: events.length, events: events.slice(0, 30) };
     }
     if (req.source === "health" && s.apple_health) {
@@ -96,6 +103,7 @@ export class ConnectorHub implements Integrations {
       // Counts only: email text is written by other people and stays out of the coach's context.
       return { source: "email", data: "real", query: req.metric, matchesLast7Days: r.count };
     }
+    if (this.d.demoData === false) return { source: req.source, data: "none", note: "Not connected, so there is no data to look at." };
     return { ...(this.d.mock.probe(userId, tz, today, req) as object), data: "demo" };
   }
 

@@ -33,6 +33,8 @@ export const config = {
   durationDays: num("DURATION_DAYS", 60),
   defaultTz: process.env.DEFAULT_TZ ?? "America/New_York",
   timeScale: num("DEMO_TIME_SCALE", 1),
+  /** Unlocks /presenter (simulate a slip on stage) on the live site. Empty = off unless the dev panel is on. */
+  presenterKey: process.env.PRESENTER_KEY ?? "",
   mockAutofill: (process.env.MOCK_AUTOFILL ?? "1") !== "0",
   dbPath: process.env.DB_PATH ?? "./data/letsgrow.db",
   tickMs: 5_000,

@@ -5,7 +5,11 @@ import { addDays, weekday, zonedTime } from "../clock.js";
 // (only reachable through an iOS app using FamilyControls), HealthKit / Google Health,
 // and Google/Apple Calendar. Keep the same two methods when swapping them in.
 
-export interface CalEvent { title: string; startMs: number; endMs: number }
+/** A calendar event. All-day events have allDay set and are pinned to noon UTC of their date (so they fall on that date in any US/EU time zone). */
+export interface CalEvent { title: string; startMs: number; endMs: number; allDay?: boolean }
+
+/** Noon UTC of a calendar date: how all-day events are stored. */
+export function allDayMs(y: number, m: number, d: number): number { return Date.UTC(y, m - 1, d, 12); }
 
 export type SourceId = "screen_time" | "health" | "calendar" | "email";
 

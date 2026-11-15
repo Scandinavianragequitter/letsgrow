@@ -16,6 +16,8 @@ export interface DayRow { habit_id: string; day: string; status: DayStatus; deta
 export interface ReminderRow {
   id: number; habit_id: string; day: string; due_at: number; text: string;
   sent_at: number | null; deadline_at: number; confirmed_at: number | null;
+  /** Which calendar event (or fixed slot) this reminder is for, so a re-plan can add or drop exactly the right ones. */
+  event_key: string | null;
 }
 export interface FriendRow {
   id: string; habit_id: string; name: string; phone: string; state: "assigned" | "active";
@@ -36,6 +38,8 @@ export class Store {
     this.db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
     this.db.exec(SCHEMA);
     try { this.db.exec("ALTER TABLE chat ADD COLUMN channel TEXT NOT NULL DEFAULT 'web'"); } catch { /* already there */ }
+    try { this.db.exec("ALTER TABLE synced_events ADD COLUMN all_day INTEGER NOT NULL DEFAULT 0"); } catch { /* already there */ }
+    try { this.db.exec("ALTER TABLE reminders ADD COLUMN event_key TEXT"); } catch { /* already there */ }
   }
   private all<T>(sql: string, ...p: (string | number | null)[]): T[] {
     return this.db.prepare(sql).all(...p) as T[];
@@ -109,11 +113,14 @@ export class Store {
     this.run("INSERT OR REPLACE INTO day_log(habit_id,day,status,detail,resolved_at) VALUES(?,?,?,?,?)", habitId, day, status, detail, now);
   }
   days(habitId: string) { return this.all<DayRow>("SELECT * FROM day_log WHERE habit_id=? ORDER BY day", habitId); }
+  /** Remove days written by the presenter's simulated slip, so a real run's record stays honest. */
+  clearSimulatedDays(habitId: string) { this.run("DELETE FROM day_log WHERE habit_id=? AND detail LIKE 'simulated%'", habitId); }
 
   // reminders
-  addReminder(r: Omit<ReminderRow, "id" | "sent_at" | "confirmed_at">) {
-    this.run("INSERT INTO reminders(habit_id,day,due_at,text,deadline_at) VALUES(?,?,?,?,?)", r.habit_id, r.day, r.due_at, r.text, r.deadline_at);
+  addReminder(r: Omit<ReminderRow, "id" | "sent_at" | "confirmed_at" | "event_key"> & { event_key?: string | null }) {
+    this.run("INSERT INTO reminders(habit_id,day,due_at,text,deadline_at,event_key) VALUES(?,?,?,?,?,?)", r.habit_id, r.day, r.due_at, r.text, r.deadline_at, r.event_key ?? null);
   }
+  deleteReminder(id: number) { this.run("DELETE FROM reminders WHERE id=? AND sent_at IS NULL", id); }
   remindersForDay(habitId: string, day: string) {
     return this.all<ReminderRow>("SELECT * FROM reminders WHERE habit_id=? AND day=? ORDER BY due_at", habitId, day);
   }
@@ -209,14 +216,14 @@ export class Store {
   connections() { return this.all<{ user_id: string; provider: string; data_json: string }>("SELECT user_id,provider,data_json FROM connections"); }
   removeConnection(userId: string, provider: string) { this.run("DELETE FROM connections WHERE user_id=? AND provider=?", userId, provider); }
   /** Replace a user's synced events from one source inside [fromMs, toMs). */
-  replaceSyncedEvents(userId: string, source: string, fromMs: number, toMs: number, events: { title: string; startMs: number; endMs: number }[]) {
+  replaceSyncedEvents(userId: string, source: string, fromMs: number, toMs: number, events: { title: string; startMs: number; endMs: number; allDay?: boolean }[]) {
     this.run("DELETE FROM synced_events WHERE user_id=? AND source=? AND start_ms>=? AND start_ms<?", userId, source, fromMs, toMs);
-    const ins = this.db.prepare("INSERT INTO synced_events(user_id,source,title,start_ms,end_ms) VALUES(?,?,?,?,?)");
-    for (const e of events) ins.run(userId, source, e.title, e.startMs, e.endMs);
+    const ins = this.db.prepare("INSERT INTO synced_events(user_id,source,title,start_ms,end_ms,all_day) VALUES(?,?,?,?,?,?)");
+    for (const e of events) ins.run(userId, source, e.title, e.startMs, e.endMs, e.allDay ? 1 : 0);
   }
   syncedEvents(userId: string, fromMs: number, toMs: number) {
-    return this.all<{ source: string; title: string; start_ms: number; end_ms: number }>(
-      "SELECT source,title,start_ms,end_ms FROM synced_events WHERE user_id=? AND start_ms>=? AND start_ms<? ORDER BY start_ms", userId, fromMs, toMs);
+    return this.all<{ source: string; title: string; start_ms: number; end_ms: number; all_day: number }>(
+      "SELECT source,title,start_ms,end_ms,all_day FROM synced_events WHERE user_id=? AND start_ms>=? AND start_ms<? ORDER BY start_ms", userId, fromMs, toMs);
   }
 
   recentMessages(limit = 60) {
