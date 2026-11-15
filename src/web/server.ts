@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import QRCode from "qrcode";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -92,6 +93,19 @@ export function createApp(d: AppDeps) {
   app.get("/app.js", (c) => c.body(asset("app.js"), 200, { "content-type": "text/javascript" }));
   app.get("/style.css", (c) => c.body(asset("style.css"), 200, { "content-type": "text/css" }));
   app.get("/join/:token", (c) => c.html(asset("join.html")));
+
+  // QR codes. /qr is a full-screen code for the site itself (put it on the projector);
+  // /qr.svg?text=... renders a code for a link on this site (e.g. a friend invite).
+  const qrSvg = (text: string) => QRCode.toString(text, { type: "svg", margin: 1, errorCorrectionLevel: "M" });
+  app.get("/qr.svg", async (c) => {
+    const text = c.req.query("text") ?? config.publicBaseUrl;
+    if (!text.startsWith(config.publicBaseUrl)) return c.text("Only links to this site.", 400);
+    return c.body(await qrSvg(text), 200, { "content-type": "image/svg+xml", "cache-control": "no-store" });
+  });
+  app.get("/qr", async (c) => c.html(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Let'sGrow</title><style>body{margin:0;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:system-ui,sans-serif;background:#fff;color:#111}
+.qr{width:min(70vh,80vw)}h1{font-size:clamp(28px,5vw,56px);margin:0 0 16px}p{font-size:clamp(14px,2vw,22px);color:#555;margin:16px 0 0}</style></head>
+<body><h1>Let'sGrow</h1><div class="qr">${await qrSvg(config.publicBaseUrl)}</div><p>${config.publicBaseUrl}</p></body></html>`));
 
   // ---------- user flow ----------
   app.post("/api/signup", async (c) => {

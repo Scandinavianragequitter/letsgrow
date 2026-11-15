@@ -3,6 +3,7 @@
 // Needs cloudflared (macOS: brew install cloudflared). Ctrl-C stops both.
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import QRCode from "qrcode";
 
 const port = process.env.PORT || "3000";
 const URL_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/;
@@ -24,7 +25,9 @@ function onOutput(chunk) {
   const url = !app && String(chunk).match(URL_RE)?.[0];
   if (!url) return;
   clearTimeout(timeout);
-  console.log(`\n  Let'sGrow is public at ${url}\n  Open that address (not localhost) so friend links use it.\n`);
+  QRCode.toString(url, { type: "terminal", small: true }).then((qr) => {
+    console.log(`\n${qr}\n  Let'sGrow is public at ${url}\n  Scan the code above, or open ${url}/qr for a full-screen one.\n  Open that address (not localhost) so friend links use it.\n`);
+  });
   const args = ["tsx", ...(existsSync(".env") ? ["--env-file=.env"] : []), "src/main.ts"];
   // A variable already in the environment wins over .env, so this overrides PUBLIC_BASE_URL there.
   app = spawn("npx", args, { stdio: "inherit", env: { ...process.env, PUBLIC_BASE_URL: url, PORT: port } });

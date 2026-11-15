@@ -127,6 +127,8 @@ function friendsCard() {
   const card = h("div", { class: "card" }, h("h2", {}, "Your friends"));
   card.append(h("p", { class: "mute" }, "Send this link in iMessage. Whoever opens it gets their own agent that texts them only if you slip."));
   card.append(h("div", { class: "link" }, inv.url));
+  card.append(h("div", { class: "qrwrap" }, h("img", { class: "qr", src: `/qr.svg?text=${encodeURIComponent(inv.url)}`, alt: "QR code for your invite link" }),
+    h("span", { class: "mute" }, "Or let them scan this with their phone camera.")));
   card.append(h("div", { class: "row" },
     h("a", { class: "btn", href: inv.sms }, "Send in iMessage"),
     h("button", { class: "ghost", onclick: async (e) => { await navigator.clipboard.writeText(inv.text); e.target.textContent = "Copied"; } }, "Copy message")));
