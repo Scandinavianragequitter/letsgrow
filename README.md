@@ -1,6 +1,6 @@
 # Let'sGrow
 
-Pick one healthy habit. An agent works out how to verify it with the least hassle, and a friend's agent has your back over iMessage if you slip. 60 days later it closes the loop with a congrats to you and a thank-you to your friend.
+Pick one healthy habit you want to adopt. An agent tracks everyday if you're going through with it. If you start missing it, your agent will notify your friends so they can encourage/roast you.  After 60 days it closes the loop with a congrats to you and a thank-you to your friend.
 
 ## Try it
 ```bash
