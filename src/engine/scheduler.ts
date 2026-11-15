@@ -203,7 +203,8 @@ export class Scheduler {
     const statuses = store.days(h.id).map((d) => d.status);
     const sendCard = async (to: string, title: string) => {
       if (!messenger.sendImage) return;
-      try { await messenger.sendImage(to, renderCard({ title, statuses })); } catch (err) { console.warn("day-60 card not sent:", (err as Error).message); }
+      const from = h.start_day!, to_ = addDays(h.start_day!, h.duration_days - 1);
+      try { await messenger.sendImage(to, renderCard({ title, statuses, from, to: to_ })); } catch (err) { console.warn("day-60 card not sent:", (err as Error).message); }
     };
     await sendCard(user.phone, `“${plan.title}”`);
     try {

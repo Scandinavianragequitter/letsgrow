@@ -1,21 +1,32 @@
 import { Resvg } from "@resvg/resvg-js";
 import type { DayStatus } from "../db.js";
 
-// The day-60 card: one quiet, keepsake-like image sent to the user and to each friend when a habit
-// finishes. Only the habit and the days themselves, plus a small nudge to pass it on.
+// The day-60 card: a keepsake ticket sent to the user and to each friend when a habit finishes.
+// The habit, the days, and the dates it ran. Nothing else.
 
 export interface CardData {
   /** the line at the top, e.g. “Stretch before training” or "Carl’s new habit." (callers keep it private where needed) */
   title: string;
   /** one entry per day, in order */
   statuses: DayStatus[];
+  /** first and last day, YYYY-MM-DD */
+  from: string;
+  to: string;
 }
 
 const W = 1080, H = 1350;
-const FONT = `"Helvetica Neue", "SF Pro Display", Inter, Arial, sans-serif`;
-const BG = "#0B0B0C", INK = "#F4EFE6", GOLD = "#C9A45C", GOLD_LIGHT = "#F3E3B5", DIM = "#1D1D20", HAIR = "#2E2E32";
+// The renderer only uses the first font it's given (no fallback lists, no generic names), so name one per platform.
+const MAC = process.platform === "darwin";
+const SANS = MAC ? "Helvetica Neue" : "Inter";
+const MONO = MAC ? "Menlo" : "DejaVu Sans Mono";
+const PAGE = "#1C1612", TICKET = "#0E0C0A", INK = "#F4EFE6", GOLD = "#C9A45C", GOLD_LIGHT = "#F3E3B5", DIM = "#2C2621", HAIR = "#3A3128";
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+const MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+export const ticketDate = (day: string) => {
+  const [y, m, d] = day.split("-").map(Number);
+  return `${MONTHS[m - 1]} ${d}, ${y}`;
+};
 
 function wrap(text: string, maxChars: number, maxLines: number): string[] {
   const words = text.split(/\s+/).filter(Boolean);
@@ -30,50 +41,58 @@ function wrap(text: string, maxChars: number, maxLines: number): string[] {
 }
 
 export function cardSvg(d: CardData): string {
-  const cx = W / 2;
+  // Ticket body with a tear-off stub at the bottom.
+  const L = 64, R = W - 64, T = 64, B = H - 64, rad = 40;
+  const tear = 1084, notch = 28;
+  const x = 132;
   const parts: string[] = [];
 
-  // Title, centred, at most two lines. The whole composition is centred vertically.
+  // Title, top left.
   const lines = wrap(d.title, 26, 2);
+  lines.forEach((l, i) => parts.push(`<text x="${x}" y="${232 + i * 72}" font-family="${SANS}" font-size="60" font-weight="600" letter-spacing="-1.2" fill="${INK}">${esc(l)}</text>`));
+
+  // The days: gold for done, a quiet disc for missed, a hairline ring for days that didn't count.
   const n = d.statuses.length || 60;
   const cols = 10, r = 30, step = 84;
   const rows = Math.ceil(n / cols);
-  const blockH = 44 + (lines.length - 1) * 72 + 70 + 110 + (rows - 1) * step + 2 * r + 150 + 44;
-  const titleTop = Math.round((H - blockH) / 2) + 44;
-  lines.forEach((l, i) => parts.push(`<text x="${cx}" y="${titleTop + i * 72}" text-anchor="middle" font-size="60" font-weight="600" letter-spacing="-1.2" fill="${INK}">${esc(l)}</text>`));
-  const ruleY = titleTop + (lines.length - 1) * 72 + 70;
-  parts.push(`<line x1="${cx - 28}" y1="${ruleY}" x2="${cx + 28}" y2="${ruleY}" stroke="${GOLD}" stroke-width="2" stroke-linecap="round"/>`);
-
-  // The days: gold for done, a quiet disc for missed, a hairline ring for days that didn't count.
-  const gridW = (cols - 1) * step + 2 * r;
-  const x0 = (W - gridW) / 2 + r;
-  const y0 = ruleY + 110 + r;
+  // centre the grid between the title and the tear line
+  const titleBottom = 232 + (lines.length - 1) * 72 + 20;
+  const gridH = (rows - 1) * step + 2 * r;
+  const y0 = Math.round(titleBottom + (tear - titleBottom - gridH) / 2) + r;
   for (let i = 0; i < n; i++) {
-    const x = x0 + (i % cols) * step, y = y0 + Math.floor(i / cols) * step;
+    const cx = x + r + (i % cols) * step, cy = y0 + Math.floor(i / cols) * step;
     const s = d.statuses[i];
-    if (s === "done") parts.push(`<circle cx="${x}" cy="${y}" r="${r}" fill="url(#gold)"/>`);
-    else if (s === "missed") parts.push(`<circle cx="${x}" cy="${y}" r="${r}" fill="${DIM}"/>`);
-    else parts.push(`<circle cx="${x}" cy="${y}" r="${r - 1}" fill="none" stroke="${HAIR}" stroke-width="2"/>`);
+    if (s === "done") parts.push(`<circle cx="${cx}" cy="${cy}" r="${r}" fill="url(#gold)"/>`);
+    else if (s === "missed") parts.push(`<circle cx="${cx}" cy="${cy}" r="${r}" fill="${DIM}"/>`);
+    else parts.push(`<circle cx="${cx}" cy="${cy}" r="${r - 1}" fill="none" stroke="${HAIR}" stroke-width="2"/>`);
   }
 
-  // Pass it on: the iOS share glyph and two quiet words.
-  const sy = y0 + (rows - 1) * step + r + 150;
-  const g = `<g transform="translate(${cx - 14} ${sy - 40})" fill="none" stroke="${GOLD}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" opacity="0.9">
-<path d="M8 14 H4 V38 H24 V14 H20"/><path d="M14 2 V25"/><path d="M8 8 L14 2 L20 8"/></g>`;
-  parts.push(g);
-  parts.push(`<text x="${cx}" y="${sy + 44}" text-anchor="middle" font-size="22" font-weight="500" letter-spacing="7" fill="${GOLD}" opacity="0.85">PASS IT ON</text>`);
+  // Stub: the dates it ran, with a ghosted day count behind them.
+  const stubMid = (tear + B) / 2;
+  parts.push(`<text x="${R - 70}" y="${stubMid + 66}" text-anchor="end" font-family="${SANS}" font-size="190" font-weight="700" letter-spacing="-6" fill="${GOLD}" fill-opacity="0.09">${n}</text>`);
+  parts.push(`<text x="${x}" y="${stubMid + 11}" font-family="${MONO}" font-size="26" letter-spacing="2" fill="${INK}">${ticketDate(d.from)} – ${ticketDate(d.to)}</text>`);
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family='${FONT}'>
-<defs><radialGradient id="gold" cx="38%" cy="32%" r="75%"><stop offset="0%" stop-color="${GOLD_LIGHT}"/><stop offset="55%" stop-color="${GOLD}"/><stop offset="100%" stop-color="#8F6E33"/></radialGradient></defs>
-<rect width="${W}" height="${H}" fill="${BG}"/>
-<rect x="36" y="36" width="${W - 72}" height="${H - 72}" rx="44" fill="none" stroke="${GOLD}" stroke-opacity="0.28" stroke-width="1.5"/>
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
+<defs>
+  <radialGradient id="gold" cx="38%" cy="32%" r="75%"><stop offset="0%" stop-color="${GOLD_LIGHT}"/><stop offset="55%" stop-color="${GOLD}"/><stop offset="100%" stop-color="#8F6E33"/></radialGradient>
+  <radialGradient id="glow" cx="88%" cy="6%" r="70%"><stop offset="0%" stop-color="${GOLD}" stop-opacity="0.22"/><stop offset="100%" stop-color="${GOLD}" stop-opacity="0"/></radialGradient>
+  <filter id="grain" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7" result="n"/><feColorMatrix in="n" type="saturate" values="0"/><feComponentTransfer><feFuncA type="linear" slope="0.07"/></feComponentTransfer><feComposite in2="SourceGraphic" operator="in"/></filter>
+  <mask id="ticket"><rect x="${L}" y="${T}" width="${R - L}" height="${B - T}" rx="${rad}" fill="#fff"/><circle cx="${L}" cy="${tear}" r="${notch}" fill="#000"/><circle cx="${R}" cy="${tear}" r="${notch}" fill="#000"/></mask>
+</defs>
+<rect width="${W}" height="${H}" fill="${PAGE}"/>
+<g mask="url(#ticket)">
+  <rect x="${L}" y="${T}" width="${R - L}" height="${B - T}" fill="${TICKET}"/>
+  <rect x="${L}" y="${T}" width="${R - L}" height="${B - T}" fill="url(#glow)"/>
+  <rect x="${L}" y="${T}" width="${R - L}" height="${B - T}" fill="#fff" filter="url(#grain)"/>
+</g>
+<line x1="${L + notch + 22}" y1="${tear}" x2="${R - notch - 22}" y2="${tear}" stroke="${HAIR}" stroke-width="2" stroke-dasharray="2 12" stroke-linecap="round"/>
 ${parts.join("\n")}</svg>`;
 }
 
 export function renderCard(d: CardData): Buffer {
   const png = new Resvg(cardSvg(d), {
     fitTo: { mode: "width", value: W },
-    font: { loadSystemFonts: true, defaultFontFamily: "Helvetica Neue" },
+    font: { loadSystemFonts: true, defaultFontFamily: SANS },
   }).render().asPng();
   return Buffer.from(png);
 }

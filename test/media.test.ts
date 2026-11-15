@@ -73,14 +73,14 @@ test("the coach sees the photo and can count it as proof", async () => {
   assert.equal(s.out(USER_PHONE).at(-1), "Stretch mat, legs up, counted.");
 });
 
-test("day-60 card: a real PNG with only the habit, the days and a pass-it-on mark; private for unneeded friends", () => {
+test("day-60 card: a real PNG with only the habit, the days and the dates; private for unneeded friends", () => {
   const statuses = Array.from({ length: 60 }, (_, i) => (i % 9 === 0 ? "missed" : "done")) as any;
-  const png = renderCard({ title: "“Stretch around training”", statuses });
+  const png = renderCard({ title: "“Stretch around training”", statuses, from: "2026-11-16", to: "2027-01-14" });
   assert.deepEqual([...png.subarray(1, 4)], [0x50, 0x4e, 0x47], "PNG signature");
-  const svg = cardSvg({ title: "“Stretch around training”", statuses });
+  const svg = cardSvg({ title: "“Stretch around training”", statuses, from: "2026-11-16", to: "2027-01-14" });
   const words = [...svg.matchAll(/<text[^>]*>([^<]*)<\/text>/g)].map((m) => m[1]);
-  assert.deepEqual(words, ["“Stretch around training”", "PASS IT ON"], "no other text on the card");
-  assert.equal((svg.match(/<circle /g) ?? []).length, 60, "one dot per day");
-  assert.ok(!cardSvg({ title: friendCardTitle("Carl", "Stretch around training", 0), statuses }).includes("Stretch"));
+  assert.deepEqual(words, ["“Stretch around training”", "60", "NOV 16, 2026 – JAN 14, 2027"], "only the habit, the day count and the dates");
+  assert.equal((svg.match(/<circle [^>]*r="(30|29)"/g) ?? []).length, 60, "one dot per day");
+  assert.ok(!cardSvg({ title: friendCardTitle("Carl", "Stretch around training", 0), statuses, from: "2026-11-16", to: "2027-01-14" }).includes("Stretch"));
   assert.match(friendCardTitle("Carl", "Stretch around training", 2), /Carl: “Stretch around training”/);
 });
