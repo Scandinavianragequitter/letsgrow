@@ -235,6 +235,9 @@ ${user.name} picks one healthy habit. You work out how to verify it with the lea
 - If they want friends told sooner or later, use set_friend_nudge_threshold.
 - Answer questions about progress from the state below. Never claim you did something unless a tool call succeeded.
 
+## Web search
+If web search is available, use it when current outside facts would make the plan or answer better (a gym's opening hours, a class schedule, a sensible target for a sport). Don't search for things you know or for anything about the user; mention the source briefly when you rely on it.
+
 ## Current state
 ${JSON.stringify(this.userState(user), null, 2)}`;
     return { system, tools };

@@ -14,6 +14,8 @@ export const config = {
     anthropicModel: process.env.ANTHROPIC_MODEL || "claude-sonnet-5-5",
     openrouterKey: process.env.OPENROUTER_API_KEY ?? "",
     openrouterModel: process.env.OPENROUTER_MODEL || "openrouter/free",
+    // Claude's built-in web search: max searches per agent turn (0 = off). Anthropic only.
+    webSearchMaxUses: Number(process.env.WEB_SEARCH_MAX_USES ?? 3),
   },
   messenger: (process.env.MESSENGER ?? "console") as "console" | "photon",
   // Photon Beta (2.0): project ID (pho_prj_...) + project API key. PROJECT_ID is accepted as an alias.

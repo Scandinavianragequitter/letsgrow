@@ -38,8 +38,9 @@ export async function runAgent(args: {
 
   for (let step = 0; step < maxSteps; step++) {
     const out = await llm.complete({ system, messages, tools: defs });
+    for (let n = 0; n < (out.webSearches ?? 0); n++) calls.push({ name: "web_search", input: null, ok: true, result: null });
     if (out.toolCalls.length === 0) return { text: out.text, calls };
-    messages.push({ role: "assistant", content: out.text, toolCalls: out.toolCalls });
+    messages.push({ role: "assistant", content: out.text, toolCalls: out.toolCalls, raw: out.raw });
     for (const call of out.toolCalls) {
       const tool = tools.find((t) => t.name === call.name);
       let result: unknown;

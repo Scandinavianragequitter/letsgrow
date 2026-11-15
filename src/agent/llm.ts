@@ -7,10 +7,11 @@ export interface ToolDef { name: string; description: string; schema: Record<str
 export interface ToolCall { id: string; name: string; input: unknown }
 export type ChatMessage =
   | { role: "user"; content: string }
-  | { role: "assistant"; content: string; toolCalls?: ToolCall[] }
+  /** `raw`: the provider's own content blocks, replayed as-is (needed for server-side tools like web search). */
+  | { role: "assistant"; content: string; toolCalls?: ToolCall[]; raw?: unknown }
   | { role: "tool"; toolCallId: string; name: string; content: string };
 
-export interface LlmResult { text: string; toolCalls: ToolCall[] }
+export interface LlmResult { text: string; toolCalls: ToolCall[]; raw?: unknown; webSearches?: number }
 export interface LlmClient {
   readonly label: string;
   complete(args: { system: string; messages: ChatMessage[]; tools?: ToolDef[]; maxTokens?: number }): Promise<LlmResult>;
@@ -19,9 +20,13 @@ export interface LlmClient {
 export class AnthropicLlm implements LlmClient {
   private client: Anthropic;
   readonly label: string;
-  constructor(apiKey: string, private model: string) {
+  /**
+   * webSearchMaxUses > 0 turns on Claude's built-in web search (run by Anthropic, billed per search).
+   * Only used on calls that pass tools, i.e. the agent loop, not one-off message writing.
+   */
+  constructor(apiKey: string, private model: string, private webSearchMaxUses = 0) {
     this.client = new Anthropic({ apiKey });
-    this.label = `anthropic:${model}`;
+    this.label = `anthropic:${model}${webSearchMaxUses ? "+web_search" : ""}`;
   }
 
   async complete({ system, messages, tools, maxTokens = 1500 }: Parameters<LlmClient["complete"]>[0]): Promise<LlmResult> {
@@ -33,6 +38,7 @@ export class AnthropicLlm implements LlmClient {
         if (last?.role === "user" && Array.isArray(last.content)) (last.content as Anthropic.ContentBlockParam[]).push({ type: "text", text: m.content });
         else out.push({ role: "user", content: m.content });
       }
+      else if (m.role === "assistant" && m.raw) out.push({ role: "assistant", content: m.raw as Anthropic.ContentBlockParam[] });
       else if (m.role === "assistant") {
         const blocks: Anthropic.ContentBlockParam[] = [];
         if (m.content) blocks.push({ type: "text", text: m.content });
@@ -46,20 +52,27 @@ export class AnthropicLlm implements LlmClient {
         } else out.push({ role: "user", content: [block] });
       }
     }
-    const res = await this.client.messages.create({
-      model: this.model,
-      max_tokens: maxTokens,
-      system,
-      messages: out,
-      ...(tools?.length ? { tools: tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.schema as never })) } : {}),
-    });
+    const toolList: Anthropic.ToolUnion[] = (tools ?? []).map((t) => ({ name: t.name, description: t.description, input_schema: t.schema as never }));
+    if (tools?.length && this.webSearchMaxUses > 0) toolList.push({ type: "web_search_20250305", name: "web_search", max_uses: this.webSearchMaxUses });
+
+    // Server tools can pause a long turn; continue it by sending the partial turn back.
+    const blocks: Anthropic.ContentBlock[] = [];
+    let res: Anthropic.Message;
+    for (let i = 0; ; i++) {
+      const msgs: Anthropic.MessageParam[] = blocks.length ? [...out, { role: "assistant", content: blocks as Anthropic.ContentBlockParam[] }] : out;
+      res = await this.client.messages.create({ model: this.model, max_tokens: maxTokens, system, messages: msgs, ...(toolList.length ? { tools: toolList } : {}) });
+      blocks.push(...res.content);
+      if (res.stop_reason !== "pause_turn" || i >= 3) break;
+    }
     let text = "";
+    let webSearches = 0;
     const toolCalls: ToolCall[] = [];
-    for (const block of res.content) {
+    for (const block of blocks) {
       if (block.type === "text") text += block.text;
       else if (block.type === "tool_use") toolCalls.push({ id: block.id, name: block.name, input: block.input });
+      else if (block.type === "server_tool_use" && block.name === "web_search") webSearches++;
     }
-    return { text: text.trim(), toolCalls };
+    return { text: text.trim(), toolCalls, raw: blocks, webSearches };
   }
 }
 
@@ -132,10 +145,10 @@ export class MissingKeyLlm implements LlmClient {
 }
 
 export function createLlm(env: {
-  provider?: string; anthropicKey?: string; anthropicModel: string; openrouterKey?: string; openrouterModel: string;
+  provider?: string; anthropicKey?: string; anthropicModel: string; openrouterKey?: string; openrouterModel: string; webSearchMaxUses?: number;
 }): LlmClient {
   const provider = env.provider || (env.anthropicKey ? "anthropic" : env.openrouterKey ? "openrouter" : "");
-  if (provider === "anthropic" && env.anthropicKey) return new AnthropicLlm(env.anthropicKey, env.anthropicModel);
+  if (provider === "anthropic" && env.anthropicKey) return new AnthropicLlm(env.anthropicKey, env.anthropicModel, env.webSearchMaxUses ?? 0);
   if (provider === "openrouter" && env.openrouterKey) return new OpenRouterLlm(env.openrouterKey, env.openrouterModel);
   return new MissingKeyLlm();
 }
