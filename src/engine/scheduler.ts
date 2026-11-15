@@ -37,11 +37,22 @@ export class Scheduler {
     return this.d.write ? this.d.write(req) : Promise.resolve(req.fallback);
   }
 
+  private ticking: Promise<void> | null = null;
+
+  /**
+   * One heartbeat. Never runs twice at once: writing a message with the model can take longer than
+   * the 5 s between heartbeats, and an overlapping heartbeat would send the same message again.
+   * A heartbeat that arrives while one is running waits for it instead.
+   */
   async tick(now: number): Promise<void> {
-    for (const habit of this.d.store.activeHabits()) {
-      try { await this.tickHabit(habit, now); }
-      catch (err) { console.error(`tick failed for ${habit.id}:`, err); }
-    }
+    while (this.ticking) await this.ticking;
+    this.ticking = (async () => {
+      for (const habit of this.d.store.activeHabits()) {
+        try { await this.tickHabit(habit, now); }
+        catch (err) { console.error(`tick failed for ${habit.id}:`, err); }
+      }
+    })();
+    try { await this.ticking; } finally { this.ticking = null; }
   }
 
   private async tickHabit(h: HabitRow, now: number) {
@@ -162,7 +173,15 @@ export class Scheduler {
 
     if (plan.mode === "autonomous") {
       const at = zonedTime(day, plan.autonomous?.evaluateAt ?? "22:00", user.tz);
-      if (now < at) return null;
+      if (now < at) {
+        // An "at most" limit that is already broken can't recover later today: decide now.
+        const a = plan.autonomous;
+        if (a?.comparator === "lte") {
+          const r = evaluateAutonomous(plan, integrations, user.id, day);
+          if (r.status === "missed") return r;
+        }
+        return null;
+      }
       return evaluateAutonomous(plan, integrations, user.id, day);
     }
 
@@ -193,6 +212,7 @@ export class Scheduler {
   private async sendDueNudges(h: HabitRow, user: UserRow, now: number) {
     const { store, messenger, publicBaseUrl } = this.d;
     for (const n of store.dueNudges(h.id, now)) {
+      store.markNudgeSent(n.id, now); // claim it first: a nudge goes out at most once
       const friends = this.activeFriends(h.id);
       const streak = trailingMisses(store.days(h.id).filter((d) => d.day <= n.day).map((d) => d.status));
       const title = (JSON.parse(h.plan_json!) as HabitPlan).title;
@@ -201,7 +221,7 @@ export class Scheduler {
         try {
           await messenger.send(user.phone, await this.say({
             to: user.name,
-            purpose: "They missed their habit and the policy says a friend should be asked to step in, but no friend has joined yet. Encourage them briefly and ask them to send a friend their invite link.",
+            purpose: "They slipped and a friend would be told now, but no friend has joined yet. Ask them to send a friend their invite link. No pep talk.",
             facts: { habit: title, consecutiveMissedDays: streak, inviteLink: url },
             fallback: msg.noFriendYet(url),
           }));
@@ -214,14 +234,13 @@ export class Scheduler {
           const textLink = `sms:${user.phone}`;
           await messenger.send(f.phone, await this.say({
             to: f.name,
-            purpose: `${user.name} slipped on their habit. Ask ${f.name} to text ${user.name} a short word of support directly (not here), and include the link so it's one tap. Do not shame ${user.name}.`,
+            purpose: `${user.name} slipped on their habit. Tell ${f.name} and ask them to text ${user.name}, with the link. Don't suggest what to write and don't shame ${user.name}.`,
             facts: { friend: f.name, person: user.name, habit: title, consecutiveMissedDays: streak, timesAskedBefore: idx, textLinkToThem: textLink },
             fallback: msg.friendNudge(f.name, user.name, title, streak, idx, textLink),
           }));
           store.addFriendEvent(h.id, f.id, "nudge", n.day, null, now);
         } catch (err) { console.warn(`nudge to ${f.id} failed:`, (err as Error).message); }
       }
-      store.markNudgeSent(n.id, now);
     }
   }
 
@@ -246,7 +265,7 @@ export class Scheduler {
       missedDays.push(day);
     }
     store.addPendingNudge(h.id, missedDays[missedDays.length - 1] ?? day, now, "presenter: simulated slip");
-    await this.sendDueNudges(h, user, now);
+    await this.tick(now); // through the heartbeat, so it can't race it
     return { missedDays, friendsTexted: this.activeFriends(h.id).length };
   }
 

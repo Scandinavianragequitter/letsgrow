@@ -10,9 +10,9 @@ export const msg = {
   friendNudge: (friend: string, user: string, title: string, misses: number, i: number, textLink: string) => {
     const days = misses > 1 ? `${misses} days in a row` : "today";
     return pick([
-      `Hey ${friend}, ${user} missed their habit (${title}) ${days}. Could you text them a quick word of support? ${textLink}`,
-      `${friend}, small ask: ${user} slipped on "${title}" ${days}. A message from you would help: ${textLink}`,
-      `Quick one, ${friend}: ${user} is behind on "${title}" (${days}). Cheer them on? ${textLink}`,
+      `${friend}, ${user} missed ${title} ${days}. Text them? ${textLink}`,
+      `${user} slipped on ${title} ${days}. A text from you would help: ${textLink}`,
+      `Quick one, ${friend}: ${user} is behind on ${title} (${days}). ${textLink}`,
     ], i);
   },
 

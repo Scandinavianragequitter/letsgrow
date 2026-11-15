@@ -24,6 +24,10 @@ services:
         value: "0"
       - key: DEV_PANEL
         value: "0"
+      - key: MAIL_SYNC_SECONDS
+        value: "20"          # demo: email habits checked every 20 s
+      - key: INSTANT_NUDGE
+        value: "1"           # demo: friend hears on the first miss. "0" = the agent's choice
       - key: PUBLIC_BASE_URL
         sync: false          # e.g. https://letsgrow.onrender.com or your domain
       - key: GOOGLE_REDIRECT_URI
@@ -33,6 +37,8 @@ services:
       - key: PHOTON_API_KEY
         sync: false
       - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
         sync: false
       - key: GOOGLE_CLIENT_ID
         sync: false

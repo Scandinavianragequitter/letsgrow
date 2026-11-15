@@ -39,10 +39,9 @@ function describePlan(p) {
     for (const r of p.prompted.reminders) {
       if (r.anchor === "calendar_event") {
         const m = Math.abs(r.offsetMinutes), before = r.offsetMinutes < 0;
-        lines.push(`${m} min ${before ? "before" : "after"} the ${r.edge} of any “${r.eventKeyword}” on your calendar: “${r.text}”`);
+        lines.push(`${m} min ${before ? "before" : "after"} the ${r.edge} of ${r.eventMatch || "any “" + r.eventKeyword + "”"} on your calendar: “${r.text}”`);
       } else lines.push(`At ${r.time}: “${r.text}”`);
     }
-    lines.push(p.prompted.confirmWith === "heart" ? "You confirm with one ❤️ tap." : "You confirm with a one-word reply.");
   }
   if (p.daysOfWeek?.length) lines.push("Days: " + p.daysOfWeek.map((d) => "SunMonTueWedThuFriSat".slice(d * 3, d * 3 + 3)).join(", "));
   return lines;
@@ -50,33 +49,35 @@ function describePlan(p) {
 
 function signupView() {
   const name = h("input", { id: "su-name", placeholder: "First name", autocomplete: "given-name" });
-  const phone = h("input", { id: "su-phone", placeholder: "Your iMessage number, e.g. +1 555 123 4567", type: "tel" });
+  const phone = h("input", { id: "su-phone", placeholder: "iPhone number", type: "tel", autocomplete: "tel" });
   const err = h("div", { class: "err" });
   const go = h("button", { onclick: async () => {
     err.textContent = "";
     try {
       const r = await api("/api/signup", "POST", { name: name.value, phone: phone.value });
       if (r.warning) err.textContent = r.warning;
+      document.querySelector("header").hidden = false;
       if (r.pending) return codeView(r.pending);
       S = r; render(true);
     } catch (e) { err.textContent = e.message; }
-  } }, "Get started");
-  root.replaceChildren(h("div", { class: "center" },
-    h("h1", {}, "Grow one habit."),
-    h("p", { class: "mute" }, "Tell an agent the habit you want. It works out how to check on you with the least hassle, and a friend's agent has your back if you slip."),
-    h("div", { class: "card" }, h("label", {}, "Name"), name, h("label", {}, "Phone (iMessage)"), phone, h("div", { class: "row" }, go), err)));
+  } }, "Continue");
+  go.className = "wide";
+  document.querySelector("header").hidden = true; // the page title is the wordmark here
+  root.replaceChildren(h("div", { class: "center hero" },
+    h("h1", { class: "wordmark-xl" }, "Let’s", h("span", { class: "acc" }, "Grow.")),
+    h("p", { class: "lede" }, "Your agent will text you."),
+    h("div", { class: "form" }, name, phone, go, err)));
 }
 
 /** Live site: prove the number is yours by texting the code to your agent. */
 function codeView(p) {
-  const status = h("p", { class: "mute" }, "Waiting for your text…");
+  const status = h("p", { class: "mute small center-text" }, "Waiting for your text…");
   root.replaceChildren(h("div", { class: "center" },
-    h("h1", {}, "Text your agent."),
-    h("p", { class: "mute" }, "Send this code from your iPhone. It signs you in and starts your conversation."),
-    h("div", { class: "card codecard" },
+    h("h1", {}, "Text this to", h("br"), h("span", { class: "acc" }, "your agent.")),
+    h("div", { class: "codecard" },
       h("div", { class: "code" }, p.code),
-      h("a", { class: "btn", href: p.sms }, "Open Messages"),
-      h("p", { class: "mute small" }, `to ${p.number}`)),
+      h("a", { class: "btn wide", href: p.sms }, "Open Messages"),
+      h("p", { class: "mute small" }, p.number)),
     status));
   const iv = setInterval(async () => {
     try {

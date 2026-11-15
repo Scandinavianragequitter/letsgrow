@@ -105,3 +105,19 @@ export async function searchMail(token: string, query: string, details = 10, fet
 export function dayQuery(query: string, dayStartMs: number, dayEndMs: number) {
   return `(${query}) after:${Math.floor(dayStartMs / 1000)} before:${Math.floor(dayEndMs / 1000)}`;
 }
+
+export interface MailMeta { id: string; from: string; subject: string; snippet: string; receivedMs: number }
+
+/** IDs of messages matching a Gmail search, newest first (up to `max`). */
+export async function listMailIds(token: string, query: string, max = 50, fetchImpl: typeof fetch = fetch): Promise<string[]> {
+  const q = new URLSearchParams({ q: query, maxResults: String(max) });
+  const list = await api(token, `https://gmail.googleapis.com/gmail/v1/users/me/messages?${q}`, fetchImpl);
+  return (list.messages ?? []).map((m: any) => m.id);
+}
+
+/** Sender, subject, snippet and arrival time of one message. Never the full body. */
+export async function mailMeta(token: string, id: string, fetchImpl: typeof fetch = fetch): Promise<MailMeta> {
+  const m = await api(token, `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`, fetchImpl);
+  const h = (name: string) => (m.payload?.headers ?? []).find((x: any) => x.name.toLowerCase() === name.toLowerCase())?.value ?? "";
+  return { id, from: h("From"), subject: h("Subject"), snippet: m.snippet ?? "", receivedMs: Number(m.internalDate ?? Date.now()) };
+}

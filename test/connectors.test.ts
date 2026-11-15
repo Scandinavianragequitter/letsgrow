@@ -45,8 +45,12 @@ function fakeNet() {
     ] });
     if (url.includes("/gmail/v1/users/me/messages?")) {
       const q = new URL(url).searchParams.get("q") ?? "";
-      return json({ messages: q.includes("duolingo") ? [{ id: "m1" }] : [] });
+      return json({ messages: q.includes("duolingo") ? [{ id: "m1" }] : q.includes("canvas") ? [{ id: "m2" }, { id: "m3" }] : [] });
     }
+    const canvas = (subject: string) => json({ internalDate: String(NOW - 3_600_000), snippet: subject, payload: { headers: [
+      { name: "From", value: "Canvas <notifications@instructure.com>" }, { name: "Subject", value: subject }] } });
+    if (url.includes("/gmail/v1/users/me/messages/m2")) return canvas("New assignment posted: Problem Set 4");
+    if (url.includes("/gmail/v1/users/me/messages/m3")) return canvas("Fwd: Missing submission: Problem Set 3");
     if (url.includes("/gmail/v1/users/me/messages/m1")) return json({ snippet: "You kept your streak!", payload: { headers: [
       { name: "From", value: "Duolingo <hello@duolingo.com>" }, { name: "Subject", value: "17 day streak" }, { name: "Date", value: "Mon, 16 Nov 2026 08:00:00 -0500" }] } });
     return new Response("not found", { status: 404 });
@@ -108,7 +112,7 @@ test("Google: the link goes to Google's consent screen, the callback connects Ca
   assert.equal((await s.app.request(`/connect/google?t=bogus`)).status, 410);
 });
 
-test("Gmail: connecting adds the scope, search returns metadata only, email habits are counted per day", async () => {
+test("Gmail: connecting adds the scope, search returns metadata only; email habits are judged email by email", async () => {
   const s = setup();
   const t = new URL(s.links.link(s.user.id, "gmail").link).searchParams.get("t")!;
   await s.app.request(`/oauth/google/callback?code=gmail-code&state=${t}`);
@@ -117,13 +121,24 @@ test("Gmail: connecting adds the scope, search returns metadata only, email habi
   const r = await s.hub.searchEmail(s.user.id, "from:duolingo", 7);
   assert.deepEqual(r.messages[0], { from: "Duolingo <hello@duolingo.com>", subject: "17 day streak", date: "Mon, 16 Nov 2026 08:00:00 -0500", snippet: "You kept your streak!" });
 
-  const habit = s.store.createHabit(s.user.id, "duolingo daily", 60, "{}", NOW);
-  s.store.setPlan(habit.id, JSON.stringify({ title: "Duolingo every day", summary: "x", mode: "autonomous",
-    autonomous: { source: "email", metric: "from:duolingo", comparator: "gte", threshold: 1, evaluateAt: "23:00" }, suggestedMissedDaysBeforeFriendNudge: 1 }), "x");
-  await s.hub.syncUser(s.user.id);
-  assert.equal(s.hub.metric(s.user.id, "email", "from:duolingo", "2026-11-16"), 1);
-  const q = s.net.calls.find((u) => u.includes("messages?q="))!;
-  assert.match(new URL(q).searchParams.get("q")!, /after:\d+ before:\d+/, "searches are limited to the day");
+  const habit = s.store.createHabit(s.user.id, "assignments on time", 60, "{}", NOW - 86_400_000);
+  const what = "a Canvas notice that an assignment is missing or late";
+  s.store.setPlan(habit.id, JSON.stringify({ title: "Assignments on time", summary: "x", mode: "autonomous",
+    autonomous: { source: "email", metric: what, queryHint: "canvas OR instructure", comparator: "lte", threshold: 0, evaluateAt: "23:59" }, suggestedMissedDaysBeforeFriendNudge: 1 }), "x");
+  s.store.activateHabit(habit.id, "2026-11-15", NOW - 86_400_000);
+  const judged: string[][] = [];
+  // Stands in for the quarantined checker: a "missing" notice counts, a "new assignment" one doesn't.
+  s.hub.useMailJudge(async (desc, mails) => {
+    assert.equal(desc, what);
+    judged.push(mails.map((m) => m.id));
+    return new Set(mails.filter((m) => /missing/i.test(m.subject)).map((m) => m.id));
+  });
+  await s.hub.syncMail(s.user.id);
+  assert.equal(s.hub.metric(s.user.id, "email", what, "2026-11-16"), 1);
+  await s.hub.syncMail(s.user.id);
+  assert.deepEqual(judged, [["m2", "m3"]], "each email is judged once, however often the inbox is checked");
+  const q = new URL(s.net.calls.find((u) => u.includes("messages?q=canvas"))!).searchParams.get("q")!;
+  assert.match(q, /^canvas OR instructure after:\d+$/);
 });
 
 test("Apple Health: the setup page shows a personal address; uploads replace demo data", async () => {

@@ -252,7 +252,7 @@ export function createApp(d: AppDeps) {
     try { number = (await d.assigner.assign(phone, name)).number; }
     catch (err) { return c.json({ error: `Could not set up your line: ${(err as Error).message}` }, 502); }
     store.addFriend(h.id, name, phone, number, clock.now());
-    return c.json({ number, sms: smsHref(number, "ping"), userName: owner.name });
+    return c.json({ number, sms: smsHref(number, "hi"), userName: owner.name });
   });
 
   // ---------- presenter control (on stage: play out a slip without typing into iMessage) ----------
@@ -266,11 +266,16 @@ export function createApp(d: AppDeps) {
     if (!presenterOk(key)) return c.notFound();
     const user = userOf(c);
     const habit = user && store.currentHabit(user.id);
-    if (!user || !habit) return c.json({ error: "Sign in on this browser as the person whose habit is running." }, 400);
-    if (c.req.param("action") === "undo") { store.clearSimulatedDays(habit.id); return c.json({ ok: true, note: "Simulated misses removed." }); }
+    if (!user) return c.json({ error: "Sign in on this browser first." }, 400);
+    if (!habit && c.req.param("action") !== "reset") return c.json({ error: "No habit is running." }, 400);
+    if (c.req.param("action") === "undo") { store.clearSimulatedDays(habit!.id); return c.json({ ok: true, note: "Simulated misses removed." }); }
+    if (c.req.param("action") === "reset") {
+      const r = store.resetHabits(user.id);
+      return c.json({ ok: true, note: `Cleared ${r.habits} habit(s) and ${r.friends} friend(s). Text your agent to start again.` });
+    }
     if (c.req.param("action") !== "slip") return c.notFound();
     try {
-      const r = await d.scheduler.simulateSlip(habit.id, clock.now());
+      const r = await d.scheduler.simulateSlip(habit!.id, clock.now());
       return c.json({ ok: true, note: r.friendsTexted ? `Missed ${r.missedDays.length} day(s). ${r.friendsTexted} friend(s) texted.` : `Missed ${r.missedDays.length} day(s). No friend has joined, so ${user.name} was asked to invite one.` });
     } catch (err) { return c.json({ error: (err as Error).message }, 400); }
   });
@@ -333,16 +338,17 @@ function presenterPage(key: string): string {
   h1{font-weight:600;font-size:28px;letter-spacing:-.02em;margin:0 0 8px}
   p{color:#86868b;margin:0 0 32px}
   button{display:block;width:100%;border:0;border-radius:14px;padding:16px;font:inherit;font-weight:600;cursor:pointer;margin-bottom:12px}
-  #slip{background:#f5f5f7;color:#000} #undo{background:#1d1d1f;color:#f5f5f7}
+  #slip{background:#f5f5f7;color:#000} #undo,#reset{background:#1d1d1f;color:#f5f5f7} #reset{color:#ff453a;margin-top:28px}
   #out{min-height:1.4em;color:#86868b;margin-top:16px}
 </style></head><body><main>
 <h1>Skip ahead</h1><p>Plays out a slip now: the days are marked missed and the friend's agent texts them.</p>
-<button id="slip">Simulate a slip</button><button id="undo">Undo</button><div id="out"></div>
+<button id="slip">Simulate a slip</button><button id="undo">Undo</button><button id="reset">Clear my habits &amp; friends</button><div id="out"></div>
 <script>
 const key=${JSON.stringify(key)};
 async function go(a){const o=document.getElementById("out");o.textContent="…";
   const r=await fetch("/api/presenter/"+a,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({key})});
   const j=await r.json().catch(()=>({error:"Failed"}));o.textContent=j.note||j.error;}
 document.getElementById("slip").onclick=()=>go("slip");document.getElementById("undo").onclick=()=>go("undo");
+document.getElementById("reset").onclick=()=>{if(confirm("Delete all your habits, friends and chats?"))go("reset");};
 </script></main></body></html>`;
 }

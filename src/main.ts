@@ -38,7 +38,7 @@ if (config.messenger === "photon") {
   assigner = new ConsoleAssigner(config.sharedLineNumber);
 }
 
-const actions = new HabitActions({ store, durationDays: config.durationDays, publicBaseUrl: config.publicBaseUrl, now });
+const actions = new HabitActions({ store, durationDays: config.durationDays, publicBaseUrl: config.publicBaseUrl, now, instantNudge: config.instantNudge });
 const agent = new LetsGrowAgent({ store, llm, integrations, actions, messenger: transport, now, hub: integrations, links });
 const messenger = agent.messenger; // records every text in the person's thread
 const scheduler = new Scheduler({ store, integrations, messenger, publicBaseUrl: config.publicBaseUrl, write: (r) => agent.write(r), matchEvents: agent.matchEvents });
@@ -64,13 +64,15 @@ const connect = {
   },
 };
 const app = createApp({ store, clock, agent, actions, scheduler, messenger, assigner, devPanel, consoleTransport, connect, login });
+integrations.useMailJudge((desc, mails) => agent.judgeMail(desc, mails));
+setInterval(() => { void integrations.syncMailAll(); }, config.mailSyncSeconds * 1000);
 void integrations.syncAll();
 setInterval(() => { void integrations.syncAll(); }, config.syncMinutes * 60_000);
 
 setInterval(() => { void scheduler.tick(clock.now()); }, config.tickMs);
 serve({ fetch: app.fetch, port: config.port }, () => {
   console.log(`Let'sGrow running at ${config.publicBaseUrl}  (messenger: ${messenger.mode}, model: ${llm.label}, dev panel: ${devPanel ? "on" : "off"})`);
-  if (llm.label === "none") console.warn("No LLM configured: set ANTHROPIC_API_KEY or OPENROUTER_API_KEY in .env.");
+  if (llm.label === "none") console.warn("No LLM configured: set GEMINI_API_KEY (and ANTHROPIC_API_KEY as backup) in .env.");
 });
 
 for (const sig of ["SIGINT", "SIGTERM"] as const) {

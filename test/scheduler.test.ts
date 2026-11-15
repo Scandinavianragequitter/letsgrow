@@ -4,6 +4,7 @@ import { Scheduler } from "../src/engine/scheduler.js";
 import { ScriptedLlm } from "./fake-llm.js";
 import { FRIEND_PHONE, USER_PHONE, TZ, addActiveFriend, instagramPlan, setup, startHabit, stretchPlan, zonedTime } from "./helpers.js";
 import { addDays } from "../src/clock.js";
+import { HabitActions } from "../src/engine/actions.js";
 
 const MIN = 60_000;
 const MON = "2026-11-16"; // a Monday: autofilled calendar has Training 18:00-19:30
@@ -79,11 +80,12 @@ test("autonomous: Screen Time is checked without asking the user anything", asyn
   const start = zonedTime(MON, "09:00", TZ);
   s.setNow(start);
   const habit = startHabit(s, instagramPlan, start);
+  s.store.setSignal(s.user.id, MON, "app_minutes:Instagram", 40);
+  await s.scheduler.tick(zonedTime(MON, "20:00", TZ));
+  assert.equal(s.store.getDay(habit.id, MON), undefined, "under the limit: not decided before 22:00");
   s.store.setSignal(s.user.id, MON, "app_minutes:Instagram", 95);
   await s.scheduler.tick(zonedTime(MON, "21:00", TZ));
-  assert.equal(s.store.getDay(habit.id, MON), undefined); // not evaluated before 22:00
-  await s.scheduler.tick(zonedTime(MON, "22:05", TZ));
-  const d = s.store.getDay(habit.id, MON)!;
+  const d = s.store.getDay(habit.id, MON)!; // over an "at most" limit: decided at once
   assert.equal(d.status, "missed");
   assert.match(d.detail!, /95 min \(target <= 60 min\)/);
   assert.equal(s.out(USER_PHONE).length, 0); // the user was never messaged
@@ -255,4 +257,54 @@ test("calendar reminders: the model picks the events (all-day ones too), and tod
   events = [events[1], events[2], { title: "Group Ride", startMs: zonedTime(MON, "18:00", TZ), endMs: zonedTime(MON, "19:00", TZ) }];
   await scheduler.tick(start + 10 * MIN);
   assert.deepEqual(dues(), [zonedTime(MON, "07:30", TZ), zonedTime(MON, "17:45", TZ)]);
+});
+
+test("a slow model never causes double texts: overlapping heartbeats and the slip button send each nudge once", async () => {
+  const s = setup();
+  const start = zonedTime(MON, "08:00", TZ);
+  s.setNow(start);
+  const write = (r: { fallback: string }) => new Promise<string>((ok) => setTimeout(() => ok(r.fallback), 30)); // slower than the heartbeat
+  const scheduler = new Scheduler({ store: s.store, integrations: s.integrations, messenger: s.messenger, publicBaseUrl: "http://x", write });
+  const habit = startHabit(s, stretchPlan, start, "two_in_a_row");
+  await addActiveFriend(s, habit.id, start);
+
+  await Promise.all([scheduler.simulateSlip(habit.id, start), scheduler.tick(start), scheduler.tick(start + 5_000), scheduler.tick(start + 10_000)]);
+  assert.equal(s.out(FRIEND_PHONE).length, 1);
+});
+
+test("reset clears one person's habits, friends and chats, and nobody else's", async () => {
+  const s = setup();
+  const start = zonedTime(MON, "08:00", TZ);
+  s.setNow(start);
+  const habit = startHabit(s, stretchPlan, start);
+  const friend = await addActiveFriend(s, habit.id, start);
+  s.store.addChat(s.user.id, "user", "hi", start, "imessage");
+  s.store.addChat(friend.id, "user", "hey", start, "imessage");
+  const other = s.store.createUser("Dana", "+15557770000", TZ, start);
+  s.store.addChat(other.id, "user", "mine", start, "imessage");
+  await s.scheduler.tick(start);
+
+  assert.deepEqual(s.store.resetHabits(s.user.id), { habits: 1, friends: 1 });
+  assert.equal(s.store.currentHabit(s.user.id), undefined);
+  assert.equal(s.store.friends(habit.id).length, 0);
+  assert.equal(s.store.chat(s.user.id).length, 0);
+  assert.equal(s.store.chat(friend.id).length, 0);
+  assert.equal(s.store.remindersForDay(habit.id, MON).length, 0);
+  assert.ok(s.store.getUser(s.user.id), "account kept");
+  assert.equal(s.store.chat(other.id).length, 1, "other people untouched");
+});
+
+test("demo setting: the friend hears on the very first miss, with no grace period", async () => {
+  const s = setup();
+  const start = zonedTime(MON, "08:00", TZ);
+  s.setNow(start);
+  const actions = new HabitActions({ store: s.store, durationDays: 60, publicBaseUrl: "http://x", now: () => start, instantNudge: true });
+  actions.savePlan(s.user, { ...stretchPlan, suggestedMissedDaysBeforeFriendNudge: 3 }, "stretch");
+  const { habit } = actions.start(s.store.getUser(s.user.id)!);
+  await addActiveFriend(s, habit.id, start);
+  await s.scheduler.tick(start);
+  // Both reminders ignored; the day is missed once the last deadline (19:35 + 120 min) passes.
+  for (const t of ["17:51", "19:36", "21:36"]) await s.scheduler.tick(zonedTime(MON, t, TZ));
+  assert.equal(s.store.getDay(habit.id, MON)?.status, "missed");
+  assert.equal(s.out(FRIEND_PHONE).length, 1, "texted in the same tick the miss was found");
 });

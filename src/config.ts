@@ -7,14 +7,13 @@ function num(name: string, fallback: number): number {
 export const config = {
   port: num("PORT", 3000),
   publicBaseUrl: (process.env.PUBLIC_BASE_URL ?? "http://localhost:3000").replace(/\/$/, ""),
-  // LLM: Anthropic or any OpenRouter model. LLM_PROVIDER picks one; if empty, whichever key is set.
+  // LLM: Claude runs the agents. Gemini is used only if there is no Claude key.
   llm: {
-    provider: process.env.LLM_PROVIDER ?? "",
+    geminiKey: process.env.GEMINI_API_KEY ?? "",
+    geminiModel: process.env.GEMINI_MODEL || "gemini-3.8-flash",
     anthropicKey: process.env.ANTHROPIC_API_KEY ?? "",
     anthropicModel: process.env.ANTHROPIC_MODEL || "claude-sonnet-5-5",
-    openrouterKey: process.env.OPENROUTER_API_KEY ?? "",
-    openrouterModel: process.env.OPENROUTER_MODEL || "openrouter/free",
-    // Claude's built-in web search: max searches per agent turn (0 = off). Anthropic only.
+    // Claude's built-in web search: max searches per agent turn (0 = off).
     webSearchMaxUses: Number(process.env.WEB_SEARCH_MAX_USES ?? 3),
   },
   messenger: (process.env.MESSENGER ?? "console") as "console" | "photon",
@@ -35,6 +34,10 @@ export const config = {
   timeScale: num("DEMO_TIME_SCALE", 1),
   /** Unlocks /presenter (simulate a slip on stage) on the live site. Empty = off unless the dev panel is on. */
   presenterKey: process.env.PRESENTER_KEY ?? "",
+  /** Tell the friend on the very first miss, no grace period (demo). INSTANT_NUDGE=0 lets the agent choose. */
+  instantNudge: (process.env.INSTANT_NUDGE ?? "1") !== "0",
+  /** How often email habits are checked, in seconds (20 for a live demo). Calendars use syncMinutes. */
+  mailSyncSeconds: Number(process.env.MAIL_SYNC_SECONDS ?? 60),
   mockAutofill: (process.env.MOCK_AUTOFILL ?? "1") !== "0",
   dbPath: process.env.DB_PATH ?? "./data/letsgrow.db",
   tickMs: 5_000,

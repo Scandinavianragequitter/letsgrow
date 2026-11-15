@@ -113,6 +113,25 @@ export class Store {
     this.run("INSERT OR REPLACE INTO day_log(habit_id,day,status,detail,resolved_at) VALUES(?,?,?,?,?)", habitId, day, status, detail, now);
   }
   days(habitId: string) { return this.all<DayRow>("SELECT * FROM day_log WHERE habit_id=? ORDER BY day", habitId); }
+  /**
+   * Fresh start for one person: deletes their habits, friends and both sides' chats, plus every
+   * reminder, day and nudge of those habits. Keeps the account, sign-in, iMessage line and connections.
+   */
+  resetHabits(userId: string): { habits: number; friends: number } {
+    const habitIds = this.all<{ id: string }>("SELECT id FROM habits WHERE user_id=?", userId).map((r) => r.id);
+    let friends = 0;
+    for (const h of habitIds) {
+      const fids = this.all<{ id: string }>("SELECT id FROM friends WHERE habit_id=?", h).map((r) => r.id);
+      friends += fids.length;
+      for (const f of fids) this.run("DELETE FROM chat WHERE user_id=?", f);
+      for (const t of ["day_log", "reminders", "materialized", "friend_events", "pending_nudges", "friends"]) this.run(`DELETE FROM ${t} WHERE habit_id=?`, h);
+      this.run("DELETE FROM kv WHERE key LIKE ?", `plan-sig:${h}:%`);
+      this.run("DELETE FROM kv WHERE key=?", `mail-judged:${h}`);
+    }
+    this.run("DELETE FROM habits WHERE user_id=?", userId);
+    this.run("DELETE FROM chat WHERE user_id=?", userId);
+    return { habits: habitIds.length, friends };
+  }
   /** Remove days written by the presenter's simulated slip, so a real run's record stays honest. */
   clearSimulatedDays(habitId: string) { this.run("DELETE FROM day_log WHERE habit_id=? AND detail LIKE 'simulated%'", habitId); }
 

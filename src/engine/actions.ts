@@ -9,7 +9,11 @@ import { policyFromPreset, policyFromSuggestion } from "../policy/escalation.js"
 export const INVITE_TEXT = "Remind me if I'm late on my new healthy habit. Let's grow!";
 
 export class HabitActions {
-  constructor(private d: { store: Store; durationDays: number; publicBaseUrl: string; now: () => number }) {}
+  constructor(private d: {
+    store: Store; durationDays: number; publicBaseUrl: string; now: () => number;
+    /** Demo setting: the friend is told on the very first miss, with no grace period. */
+    instantNudge?: boolean;
+  }) {}
 
   inviteMessage(h: HabitRow) { return `${INVITE_TEXT} ${this.d.publicBaseUrl}/join/${h.invite_token}`; }
 
@@ -19,7 +23,8 @@ export class HabitActions {
     if (habit && habit.status !== "planning") throw new Error(`A habit is already ${habit.status}. Cancel it first to plan a new one.`);
     if (!habit) habit = store.createHabit(user.id, description, this.d.durationDays, JSON.stringify(policyFromPreset("standard")), now());
     store.setPlan(habit.id, JSON.stringify(HabitPlanSchema.parse(plan)), plan.title);
-    store.setEscalation(habit.id, JSON.stringify(policyFromSuggestion(plan.suggestedMissedDaysBeforeFriendNudge)));
+    const policy = this.d.instantNudge ? policyFromPreset("immediate") : policyFromSuggestion(plan.suggestedMissedDaysBeforeFriendNudge);
+    store.setEscalation(habit.id, JSON.stringify(policy));
     return store.getHabit(habit.id)!;
   }
 

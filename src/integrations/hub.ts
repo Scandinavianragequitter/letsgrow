@@ -17,10 +17,14 @@ export interface HubDeps {
   fetch?: typeof fetch;
   /** Demo data for sources a person hasn't connected (local demo). Off on the live site: unconnected means no data. */
   demoData?: boolean;
+  /** The quarantined Gmail checker: which of these emails fit the description. Set by main. */
+  judgeMail?: (description: string, mails: google.MailMeta[]) => Promise<Set<string>>;
 }
 
 export class ConnectorHub implements Integrations {
   constructor(private d: HubDeps) {}
+  /** The Gmail checker lives with the agent; it's handed over once both exist. */
+  useMailJudge(judge: NonNullable<HubDeps["judgeMail"]>) { this.d.judgeMail = judge; }
   private get f() { return this.d.fetch ?? fetch; }
 
   // ---------- what is connected ----------
@@ -74,8 +78,8 @@ export class ConnectorHub implements Integrations {
       { source: "calendar", connected: cal, use: "context",
         notes: cal ? `Real calendar (${[s.google_calendar && "Google", s.apple_calendar && "Apple public calendar"].filter(Boolean).join(" + ")}).` :
           `Not connected (${until}). For Google: request_connection google_calendar (one click). For Apple: ask them to share a public calendar link with you in this chat, then connect_calendar_link.` },
-      { source: "email", connected: s.gmail, use: "measure", metrics: ["<Gmail search query>, e.g. from:duolingo subject:streak"],
-        notes: s.gmail ? "Real Gmail (read-only, metadata and snippets). Measures: number of matching emails that day." :
+      { source: "email", connected: s.gmail, use: "measure", metrics: ["<plain words for which emails count>, e.g. a Canvas notice that an assignment is missing or late"],
+        notes: s.gmail ? "Real Gmail (read-only). For a plan: metric = plain words describing which emails count, queryHint = a broad Gmail search that finds candidates (e.g. canvas OR instructure). A separate checker judges each new email within a minute; the day's count is compared with the threshold, so for \"no X\" habits use comparator lte, threshold 0 (one matching email is a slip at once). probe_data_source email takes a Gmail search and returns counts only." :
           s.google_configured ? "Not connected. request_connection gmail gives them a one-click link." : "Unavailable: Google sign-in is not configured on this server." },
     ];
   }
@@ -166,18 +170,42 @@ export class ConnectorHub implements Integrations {
     if (s.google_calendar) {
       store.replaceSyncedEvents(userId, "google", from, to, await google.calendarEvents(await this.googleToken(userId), from, to, this.f));
     }
-    if (s.gmail) {
-      // Count matching emails for today and yesterday for every email-verified habit.
-      const habit = store.currentHabit(userId);
-      const plan = habit?.plan_json ? (JSON.parse(habit.plan_json) as HabitPlan) : undefined;
-      if (plan?.autonomous?.source === "email") {
-        const token = await this.googleToken(userId);
-        for (const day of [addDays(today, -1), today]) {
-          const a = zonedTime(day, "00:00", user.tz), b = zonedTime(addDays(day, 1), "00:00", user.tz);
-          const r = await google.searchMail(token, google.dayQuery(plan.autonomous.metric, a, b), 0, this.f);
-          store.setSignal(userId, day, `email:${plan.autonomous.metric}`, r.count);
-        }
-      }
+    if (s.gmail) await this.syncMail(userId);
+  }
+
+  /** Email habits for everyone with Gmail connected. Runs on its own, faster timer. */
+  async syncMailAll() {
+    const users = new Set(this.d.store.connections().filter((c) => c.provider === "google").map((c) => c.user_id));
+    for (const u of users) await this.syncMail(u).catch((err) => console.warn(`mail check for ${u} failed:`, err.message));
+  }
+
+  /**
+   * For an email-verified habit: judge each email that arrived since the habit started (once per
+   * email, so frequent checks stay cheap) and store how many counted per day. A day's count is what
+   * the scheduler compares against the plan, so one matching email can decide the day at once.
+   */
+  async syncMail(userId: string) {
+    const { store } = this.d;
+    const user = store.getUser(userId);
+    const habit = store.currentHabit(userId);
+    const a = habit?.status === "active" && habit.plan_json ? (JSON.parse(habit.plan_json) as HabitPlan).autonomous : undefined;
+    if (!user || !habit || a?.source !== "email" || !this.status(userId).gmail || !this.d.judgeMail) return;
+    const key = `mail-judged:${habit.id}`;
+    const judged = JSON.parse(store.getKv(key) ?? "{}") as Record<string, { day: string; match: boolean }>;
+    const since = Math.max(habit.started_at ?? 0, this.d.now() - 2 * 86_400_000);
+    const token = await this.googleToken(userId);
+    const ids = await google.listMailIds(token, `${a.queryHint ?? "in:inbox"} after:${Math.floor(since / 1000)}`, 50, this.f);
+    const fresh = ids.filter((id) => !judged[id]).slice(0, 20);
+    if (fresh.length) {
+      const mails = await Promise.all(fresh.map((id) => google.mailMeta(token, id, this.f)));
+      const hits = await this.d.judgeMail(a.metric, mails);
+      for (const m of mails) judged[m.id] = { day: dayKey(m.receivedMs, user.tz), match: hits.has(m.id) };
+      store.setKv(key, JSON.stringify(judged));
+    }
+    const today = dayKey(this.d.now(), user.tz);
+    for (const day of [addDays(today, -1), today]) {
+      if (habit.start_day && day < habit.start_day) continue;
+      store.setSignal(userId, day, `email:${a.metric}`, Object.values(judged).filter((j) => j.day === day && j.match).length);
     }
   }
 }

@@ -34,7 +34,10 @@ export const HabitPlanSchema = z
     autonomous: z
       .object({
         source: z.enum(["screen_time", "health", "calendar", "email"]),
-        metric: z.string().min(1).max(60),
+        /** What is measured. For email: plain words describing which emails count, e.g. "a Canvas notice that an assignment is missing or late". */
+        metric: z.string().min(1).max(200),
+        /** Email only: a broad Gmail search that finds candidate emails (e.g. "canvas OR instructure"). The checker judges each one. */
+        queryHint: z.string().max(120).optional(),
         comparator: z.enum(["lte", "gte"]),
         threshold: z.number(),
         unit: z.string().max(20).optional(),
@@ -45,7 +48,8 @@ export const HabitPlanSchema = z
     prompted: z
       .object({
         reminders: z.array(ReminderSchema).min(1).max(4),
-        confirmWith: z.enum(["heart", "reply"]).default("heart"),
+        /** How they show they did it. photo = preferred whenever a photo can show the habit. */
+        confirmWith: z.enum(["photo", "reply", "heart"]).default("photo"),
         confirmWithinMinutes: z.number().int().min(15).max(720).default(180),
       })
       .optional(),

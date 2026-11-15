@@ -14,7 +14,8 @@
     "test": "node --import tsx --test test/*.test.ts",
     "simulate": "tsx scripts/simulate.ts",
     "demo": "node scripts/demo.mjs",
-    "serve": "tsx src/main.ts"
+    "serve": "tsx src/main.ts",
+    "reset": "tsx scripts/reset.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.8.0",

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { FRIEND_PHONE, USER_PHONE, TZ, setup, startHabit, stretchPlan, zonedTime } from "./helpers.js";
 import { ScriptedLlm, call, lastToolResult, type LlmCall } from "./fake-llm.js";
-import { OpenRouterLlm } from "../src/agent/llm.js";
+import { GeminiLlm } from "../src/agent/llm.js";
 import type { LlmResult } from "../src/agent/llm.js";
 
 const MON = "2026-11-16";
@@ -114,7 +114,7 @@ test("write() falls back to the given text when the model is unavailable", async
   assert.equal(await s.agent.write({ to: "Anna", purpose: "x", facts: {}, fallback: "fallback text" }), "fallback text");
 });
 
-test("OpenRouter client speaks the OpenAI tool-calling format", async () => {
+test("Gemini client speaks the OpenAI-style tool-calling format", async () => {
   let sent: any;
   const fakeFetch = (async (_url: string, init: { body: string }) => {
     sent = JSON.parse(init.body);
@@ -122,7 +122,7 @@ test("OpenRouter client speaks the OpenAI tool-calling format", async () => {
       { id: "c1", type: "function", function: { name: "start_habit", arguments: "{}" } },
     ] } }] }), { status: 200 });
   }) as unknown as typeof fetch;
-  const llm = new OpenRouterLlm("key", "openrouter/free", "https://openrouter.ai/api/v1", fakeFetch);
+  const llm = new GeminiLlm("key", "gemini-x", fakeFetch);
   const out = await llm.complete({
     system: "sys",
     messages: [

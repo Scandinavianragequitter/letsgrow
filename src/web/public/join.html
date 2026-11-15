@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Let'sGrow: be a habit buddy</title>
+<title>Let’sGrow</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<header>🌱 Let'sGrow</header>
-<main><div class="center" id="root"><p class="mute">Loading…</p></div></main>
+<header><span class="wordmark">Let’s<span>Grow.</span></span></header>
+<main><div class="center hero" id="root"></div></main>
 <script>
 const token = location.pathname.split("/").pop();
 const root = document.getElementById("root");
@@ -17,29 +17,25 @@ const el = (t, a = {}, ...kids) => { const e = document.createElement(t); for (c
   const r = await fetch("/api/join/" + token);
   const info = await r.json();
   root.textContent = "";
-  if (!r.ok) { root.append(el("div", { class: "card" }, info.error || "Invite not found.")); return; }
-  const card = el("div", { class: "card" });
-  card.append(el("h1", {}, `${info.userName} wants you in their corner`));
-  card.append(el("p", { class: "mute" }, `For the next ${info.days} days they're building a new habit. You'll only hear from their agent if they slip, and that's when you'll find out what it is, so you can send some support. That's all.`));
-  const name = el("input", { placeholder: "Your first name", autocomplete: "given-name" });
-  const phone = el("input", { placeholder: "Your iMessage number, e.g. +1 555 123 4567", type: "tel" });
+  if (!r.ok) { root.append(el("h1", {}, "This invite", el("br"), el("span", { class: "acc" }, "has expired."))); return; }
+  root.append(el("h1", {}, `${info.userName} wants you`, el("br"), el("span", { class: "acc" }, "in their corner.")));
+  root.append(el("p", { class: "lede" }, `${info.days} days, one new habit. You only hear from their agent if they slip.`));
+  const name = el("input", { placeholder: "First name", autocomplete: "given-name" });
+  const phone = el("input", { placeholder: "iPhone number", type: "tel", autocomplete: "tel" });
   const err = el("div", { class: "err" });
-  const btn = el("button", {}, "Count me in");
+  const btn = el("button", { class: "wide" }, "Count me in");
   btn.onclick = async () => {
     err.textContent = ""; btn.disabled = true;
     const res = await fetch("/api/join/" + token, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: name.value, phone: phone.value }) });
     const d = await res.json(); btn.disabled = false;
     if (!res.ok) { err.textContent = d.error; return; }
     root.textContent = "";
-    const done = el("div", { class: "card" });
-    done.append(el("h1", {}, "One last step"));
-    done.append(el("p", {}, `Open iMessage and text “ping” to ${d.number} from the number you just entered. That connects you with ${d.userName}'s agent.`));
-    done.append(el("a", { class: "btn", href: d.sms }, "Open Messages"));
-    done.append(el("p", { class: "mute" }, "It has to be iMessage (blue bubble), not SMS."));
-    root.append(done);
+    root.append(el("h1", {}, "Say hi to", el("br"), el("span", { class: "acc" }, `${d.userName}'s agent.`)));
+    root.append(el("p", { class: "lede" }, "Send any text from the number you just entered."));
+    root.append(el("a", { class: "btn wide", href: d.sms }, "Open Messages"));
+    root.append(el("p", { class: "mute small center-text" }, d.number));
   };
-  card.append(el("label", {}, "Name"), name, el("label", {}, "Phone"), phone, el("div", { class: "row" }, btn), err);
-  root.append(card);
+  root.append(el("div", { class: "form" }, name, phone, btn, err));
 })();
 </script>
 </body>

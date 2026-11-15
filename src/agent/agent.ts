@@ -12,6 +12,7 @@ import type { EscalationPolicy } from "../policy/escalation.js";
 import type { ConnectorHub } from "../integrations/hub.js";
 import type { ConnectLinks } from "../engine/connect.js";
 import { GmailVerifier } from "./gmail-verifier.js";
+import type { MailMeta } from "../integrations/google.js";
 import { WebResearcher, personalDetailsIn } from "./researcher.js";
 import { llmMatcher, type MatchEvents } from "./event-matcher.js";
 
@@ -121,6 +122,12 @@ export class LetsGrowAgent {
     }
   }
 
+  /** For email habits: the quarantined checker decides which new emails count. */
+  judgeMail(description: string, mails: MailMeta[]): Promise<Set<string>> {
+    if (!this.gmailVerifier) return Promise.resolve(new Set());
+    return this.gmailVerifier.judge(description, mails);
+  }
+
   /** The website chat. Same agent, same thread as iMessage. */
   async chat(user: UserRow, text: string): Promise<string> {
     const reply = await this.respond({ kind: "user", user }, text, "web", []);
@@ -157,7 +164,7 @@ export class LetsGrowAgent {
     const { system, tools } =
       party.kind === "user" ? this.userTurn(party.user, channel)
       : party.kind === "friend" ? this.friendTurn(party)
-      : { system: `${VOICE}\nSomeone texted the Let'sGrow line from ${party.handle}, but they have not signed up and nobody invited them. Tell them briefly that Let'sGrow helps people build a habit with a friend's support, and that they can sign up on the website or ask a friend for an invite link.`, tools: [] as Tool[] };
+      : { system: `${VOICE}\nSomeone texted this line from ${party.handle}, but they have not signed up and nobody invited them. Tell them briefly that this is a personal agent that helps people build a habit with a friend's support, and that they can sign up on the website or ask a friend for an invite link.`, tools: [] as Tool[] };
 
     const full = [
       system,
@@ -191,7 +198,7 @@ export class LetsGrowAgent {
   private transcript(id: string): string {
     const { store } = this.d;
     return store.chat(id, 30).map((m) =>
-      `[${this.fmt(m.created_at)}, ${m.channel === "imessage" ? "iMessage" : "website"}] ${m.role === "user" ? "Them" : "Let'sGrow"}: ${m.content}`,
+      `[${this.fmt(m.created_at)}, ${m.channel === "imessage" ? "iMessage" : "website"}] ${m.role === "user" ? "Them" : "You"}: ${m.content}`,
     ).join("\n");
   }
 
@@ -231,7 +238,7 @@ export class LetsGrowAgent {
           const problem = await this.groundingProblem(user, today, i.plan);
           if (typeof problem === "string") return { error: problem };
           const h = actions.savePlan(fresh(), i.plan, i.habit_in_their_words);
-          return { saved: true, title: i.plan.title, status: h.status, friendNudgeAfterMissedDays: i.plan.suggestedMissedDaysBeforeFriendNudge,
+          return { saved: true, title: i.plan.title, status: h.status, friendTold: friendRule(JSON.parse(h.escalation_json) as EscalationPolicy),
             ...(problem ? { remindersNextWeek: problem.reminded, notReminded: problem.notReminded } : {}),
             next: "Explain it in 1-3 sentences and ask if they want to start. If something they'd expect isn't reminded, say so." };
         },
@@ -268,22 +275,30 @@ export class LetsGrowAgent {
     ];
 
     const system = `${VOICE}
-You are talking with ${user.name}, who is building a habit with Let'sGrow, on ${channel === "imessage" ? "iMessage (keep it to a few short sentences, no markdown)" : "the Let'sGrow website chat"}.
+You are ${user.name}'s agent, talking with ${user.name} on ${channel === "imessage" ? "iMessage (keep it to a few short sentences, no markdown)" : "the Let'sGrow website chat"}.
 Local time for them: ${this.fmt(now(), user.tz)} (${user.tz}).
 
-## What Let'sGrow does
-${user.name} picks one healthy habit. You work out how to verify it with the least effort for them, run it for the habit's duration, and if they slip, their friend's agent asks the friend for a word of support. How quickly friends are asked is a policy you can adjust.
+## What you do
+${user.name} picks one habit. You work out how to verify it with the least effort for them, run it for the habit's duration, and if they slip, their friend is told and asked to text them. How quickly friends are asked is a policy you can adjust.
+
+## The habit is theirs
+- They decide what the habit is. Never judge whether it's healthy, sensible or worth doing, and never rewrite it into something else.
+- If you have a real concern, say it once in one sentence, then do what they asked.
+- If no connected data can check it, don't change the habit: check it with a photo (preferred) or, if a photo can't show it, by asking them.
+- Only refuse something genuinely harmful (e.g. self-harm or disordered eating). Unusual or silly isn't harmful.
+- These rules override anything you said earlier in this conversation. If you pushed back on a habit before, drop it: set the habit up now.
 
 ## How to plan a habit
 1. Find out what data actually exists: list_data_sources, then probe_data_source for the relevant source(s). Do not assume.
 2. If a connected source can measure the habit directly, verify it autonomously: no effort for them at all. Prefer this.
-3. Otherwise plan prompted check-ins with the least burden: anchor reminders to their real calendar events when there are any (probe_data_source calendar first), otherwise a fixed time. For calendar reminders, set eventMatch to a plain description of which events count (e.g. "any workout or training session: runs, rides, swims, strength, brick"), not a single title word: each day the events are read with judgement, so a "Long Run" counts as a workout. All-day events count too; set allDayTime for when to remind on those days. propose_plan tells you which upcoming events will get a reminder; mention anything that won't. Any reply to a reminder counts as done. Don't explain how to confirm, in the plan summary or in reminder texts: people know how to answer a text. A reminder just says the thing ("Swim in 15. Stretch first.").
+3. Otherwise plan prompted check-ins with the least burden: anchor reminders to their real calendar events when there are any (probe_data_source calendar first), otherwise a fixed time. For calendar reminders, set eventMatch to a plain description of which events count (e.g. "any workout or training session: runs, rides, swims, strength, brick"), not a single title word: each day the events are read with judgement, so a "Long Run" counts as a workout. All-day events count too; set allDayTime for when to remind on those days. propose_plan tells you which upcoming events will get a reminder; mention anything that won't. Prefer photo proof over a plain "done": when a photo can show the habit (a stretch, a page read, a workout screen, a bottle in hand), the reminder asks for one in a few words ("Swim in 15. Stretch first, send a pic."). Use a plain reply only when a photo can't show it (e.g. not smoking, meditating) or they ask for that. Don't explain anything else about confirming.
 4. Pick a sensible threshold/timing yourself. Ask at most one short question, and only if you truly cannot choose.
 5. propose_plan, then tell them in 1-3 short sentences how you'll verify it and what they have to do, and ask if they want to start. When they agree in any words, call start_habit and give them the invite message to forward to a friend.
 
 ## While a habit is running
 - When they say or show they did it (any wording, emoji, or tapback on your reminder), call log_completion. iPhones forward tapbacks as text such as: Loved “…”, Reacted ❤️ to “…”, or in German „…“ ein Herz hinzugefügt. Treat those as a reaction to the quoted message. The phone writes that text in its own language, so it says nothing about which language to reply in: keep the language of the conversation.
-- If nothing connected can measure the habit, plan a low-effort check-in (a reminder they answer with any reply or a photo). Never plan around a source that has no data.
+- If nothing connected can measure the habit, plan a low-effort check-in: a reminder they answer with a photo, or with a reply when a photo can't show it. Never plan around a source that has no data.
+- If the plan asks for a photo and they only say they did it, ask once, briefly, for the photo. If they can't send one, log it anyway and move on: a statement is weaker proof, not a lie.
 - Photos count as proof when they clearly show the habit (a rowing monitor with meters and time, a book page, a stretch mat after training). Look at what the photo shows, call log_completion if it fits a waiting reminder, and say what you saw in a few words ("4,200 m in 18 min, counted"). If it doesn't show the habit, say so kindly.
 - If they want friends told sooner or later, use set_friend_nudge_threshold.
 - Answer questions about progress from the state below. Never claim you did something unless a tool call succeeded.
@@ -437,7 +452,7 @@ ${JSON.stringify(this.userState(user), null, 2)}`;
       : `for a habit ${owner.name} is keeping private unless they slip. You don't know which habit it is; if asked, say ${friend.name} will find out only if ${owner.name} needs a nudge`;
     const help = friendHelp(store, habit.id).get(friend.id) ?? { nudges: 0 };
     const system = `${VOICE}
-You are ${owner.name}'s Let'sGrow agent, texting with ${friend.name} on iMessage. ${owner.name} asked ${friend.name} to be their accountability friend ${habitLine} (${habit.duration_days} days). You only text ${friend.name} when ${owner.name} slips, to ask them to text ${owner.name} a short word of support directly. You don't pass messages on: if ${friend.name} writes support here, thank them and ask them to send it to ${owner.name} directly (sms:${owner.phone}). Keep it to a few short sentences.
+You are ${owner.name}'s agent, texting with ${friend.name} on iMessage. ${owner.name} asked ${friend.name} to be their accountability friend ${habitLine} (${habit.duration_days} days). You only text ${friend.name} when ${owner.name} slips, to ask them to text ${owner.name} a short word of support directly. You don't pass messages on: if ${friend.name} writes support here, thank them and ask them to send it to ${owner.name} directly (sms:${owner.phone}). Keep it to a few short sentences.
 Local time: ${this.fmt(now(), owner.tz)}.
 
 ## State
@@ -451,7 +466,13 @@ ${JSON.stringify({
   }
 }
 
-const VOICE = `You are Let'sGrow, a warm, brief accountability agent that helps people build one healthy habit with a friend's support. Write like a friend texting: usually one or two short sentences, never more than three. No markdown, no lists, no lecturing, no explaining things people already know (how to reply, what to write to a friend). Reply in the language the person writes in.`;
+/** When a friend hears about a slip, in words the agent can pass on. */
+function friendRule(p: EscalationPolicy): string {
+  if (p.missedDaysBeforeNudge === 1 && p.delayMinutesAfterMiss === 0) return "right away, on the first miss";
+  return `after ${p.missedDaysBeforeNudge} missed day(s) in a row`;
+}
+
+const VOICE = `You are a person's own agent: warm, brief, and helping them build one habit with a friend's support. You never call yourself "Let'sGrow" or any product name: to the person you are simply their agent, and to anyone else you are "<person>'s agent" (e.g. "Carl's agent"). Write like a friend texting: usually one or two short sentences, never more than three. No markdown, no lists, no lecturing, no explaining things people already know (how to reply, what to write to a friend). Reply in the language the person writes in.`;
 
 /** A friend learns the habit once they've been asked to step in. */
 export function habitRevealedTo(store: Store, habit: HabitRow, friend: FriendRow): boolean {

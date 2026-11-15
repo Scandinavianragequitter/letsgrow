@@ -66,7 +66,7 @@ test("full product flow over HTTP", async () => {
   const join = await call(`/api/join/${token}`, "POST", { name: "Anna", phone: "+1 555 000 2222" });
   assert.equal(join.status, 200);
   assert.equal(join.json.number, "+16289988199");
-  assert.match(join.json.sms, /^sms:\+16289988199&body=ping/);
+  assert.match(join.json.sms, /^sms:\+16289988199&body=hi/);
   assert.equal((await call("/api/join/not-a-token")).status, 404);
 
   // friend texts the line -> activated + welcomed
