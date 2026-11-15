@@ -4,7 +4,7 @@ import { Store } from "../src/db.js";
 import { PhotonBetaMessenger, type PhotonMessagingClient } from "../src/messaging/photon-beta.js";
 import type { InboundEvent } from "../src/messaging/messenger.js";
 import { cardSvg, renderCard } from "../src/engine/card.js";
-import { friendCardText } from "../src/engine/scheduler.js";
+import { friendCardTitle } from "../src/engine/scheduler.js";
 import { USER_PHONE, TZ, setup, startHabit, stretchPlan, zonedTime } from "./helpers.js";
 import { ScriptedLlm, call } from "./fake-llm.js";
 
@@ -73,14 +73,14 @@ test("the coach sees the photo and can count it as proof", async () => {
   assert.equal(s.out(USER_PHONE).at(-1), "Stretch mat, legs up, counted.");
 });
 
-test("day-60 card: real PNG; the friend's version hides the habit unless they were needed", () => {
+test("day-60 card: a real PNG with only the habit, the days and a pass-it-on mark; private for unneeded friends", () => {
   const statuses = Array.from({ length: 60 }, (_, i) => (i % 9 === 0 ? "missed" : "done")) as any;
-  const png = renderCard({ days: 60, title: "“Stretch around training”", done: 53, counted: 60, longestStreak: 8, statuses, footer: "With Anna" });
+  const png = renderCard({ title: "“Stretch around training”", statuses });
   assert.deepEqual([...png.subarray(1, 4)], [0x50, 0x4e, 0x47], "PNG signature");
-  assert.ok(png.length > 10_000);
-  const hidden = friendCardText("Carl", "Stretch around training", 0);
-  const shown = friendCardText("Carl", "Stretch around training", 2);
-  assert.ok(!cardSvg({ days: 60, done: 53, counted: 60, longestStreak: 8, statuses, ...hidden }).includes("Stretch"));
-  assert.match(cardSvg({ days: 60, done: 53, counted: 60, longestStreak: 8, statuses, ...shown }), /Carl: “Stretch around/);
-  assert.match(shown.footer, /stepped in 2 times/);
+  const svg = cardSvg({ title: "“Stretch around training”", statuses });
+  const words = [...svg.matchAll(/<text[^>]*>([^<]*)<\/text>/g)].map((m) => m[1]);
+  assert.deepEqual(words, ["“Stretch around training”", "PASS IT ON"], "no other text on the card");
+  assert.equal((svg.match(/<circle /g) ?? []).length, 60, "one dot per day");
+  assert.ok(!cardSvg({ title: friendCardTitle("Carl", "Stretch around training", 0), statuses }).includes("Stretch"));
+  assert.match(friendCardTitle("Carl", "Stretch around training", 2), /Carl: “Stretch around training”/);
 });
